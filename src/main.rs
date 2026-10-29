@@ -28,7 +28,7 @@ fn run_sh(path: &str) -> std::io::Result<Child> {
     result
 }
 
-fn dumpLogs(stdout: ChildStdout) {
+fn dump_logs(stdout: ChildStdout) {
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
 
@@ -48,7 +48,7 @@ fn main() {
             let stdout = child.stdout.take().unwrap();
 
             //let stderr = child.stderr.take();
-            dumpLogs(stdout)
+            dump_logs(stdout)
         }
         Err(error) => {
             print!("starting failed {error}")
