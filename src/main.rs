@@ -1,6 +1,7 @@
 use std::{
+    io::{BufRead, BufReader, Stdout},
     path::Path,
-    process::{Child, Command},
+    process::{Child, ChildStdout, Command, Stdio},
 };
 
 enum State {
@@ -16,19 +17,41 @@ struct ServerManager {
     status: State,
 }
 
-fn run_sh() -> Child {
-    let path = "/data/data/com.termux/files/home/servers/anvil";
-
-    let child = Command::new("bash")
+fn run_sh(path: &str) -> std::io::Result<Child> {
+    let result: Result<Child, std::io::Error> = Command::new("bash")
         .arg("run.sh")
-        .current_dir(&path)
-        .spawn()
-        .expect("Failed to execute command");
+        .arg("nogui")
+        .current_dir(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    result
+}
 
-    child
+fn dumpLogs(stdout: ChildStdout) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let line = line.expect("failed to read stdout");
+            println!("[out] {line}");
+        }
+    });
 }
 
 fn main() {
+    let path = "/data/data/com.termux/files/home/servers/anvil";
     println!("Hello, world!");
-    let child = run_sh();
+    match run_sh(&path) {
+        Ok(mut child) => {
+            print!("Starting...");
+            let stdout = child.stdout.take().unwrap();
+
+            //let stderr = child.stderr.take();
+            dumpLogs(stdout)
+        }
+        Err(error) => {
+            print!("starting failed {error}")
+        }
+    }
 }
