@@ -1,4 +1,7 @@
-use std::{path::Path, process::{Child, Command}};
+use std::{
+    path::Path,
+    process::{Child, Command},
+};
 
 enum State {
     Offline,
@@ -14,7 +17,7 @@ struct ServerManager {
 }
 
 fn run_sh() -> Child {
-    let path = "/data/data/com.termux/files/home/servers/anvil"
+    let path = "/data/data/com.termux/files/home/servers/anvil";
 
     let child = Command::new("bash")
         .arg("run.sh")
@@ -27,4 +30,5 @@ fn run_sh() -> Child {
 
 fn main() {
     println!("Hello, world!");
+    let child = run_sh();
 }
