@@ -1,16 +1,28 @@
-use std::process::Child;
+use std::{path::Path, process::{Child, Command}};
 
-enum State{
+enum State {
     Offline,
     Starting,
     Online,
     Stopping,
-    Crashed
+    Crashed,
 }
 
-struct ServerManager{
+struct ServerManager {
     instance: Option<Child>,
-    status: State
+    status: State,
+}
+
+fn run_sh() -> Child {
+    let path = "/data/data/com.termux/files/home/servers/anvil"
+
+    let child = Command::new("bash")
+        .arg("run.sh")
+        .current_dir(&path)
+        .spawn()
+        .expect("Failed to execute command");
+
+    child
 }
 
 fn main() {
