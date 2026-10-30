@@ -31,7 +31,7 @@ impl ServerManager {
             State::Offline | State::Crashed => {
                 match run_sh(&server_dir) {
                     Ok(child) => {
-                        print!("Start success");
+                        println!("Start success");
                         let mut child = child;
                         self.status = State::Starting;
                         let stdout = child
@@ -48,9 +48,9 @@ impl ServerManager {
                             .expect("Failed to pipe Server Error (stderr)");
                         self.instance = Some(child);
                         self.stdin = Some(stdin);
-                        print!("Dumping logs");
+                        println!("Dumping logs");
                         dump_logs(stdout);
-                        //dump_errors(stderr);
+                        dump_errors(stderr);
                     }
                     Err(e) => {
                         return Err(e);
@@ -73,7 +73,7 @@ impl ServerManager {
 }
 
 fn run_sh(path: &str) -> std::io::Result<Child> {
-    print!("Running start command");
+    println!("Running start command");
     let result: Result<Child, std::io::Error> = Command::new("bash")
         .arg("run.sh")
         .arg("nogui")
@@ -126,7 +126,7 @@ fn old_main() {
     println!("Hello, world!");
     match run_sh(&path) {
         Ok(mut child) => {
-            print!("Starting...");
+            println!("Starting...");
             let stdout = child.stdout.take().unwrap();
             let stdin = child.stdin.take().unwrap();
             let stderr = child.stderr.take();
@@ -136,26 +136,26 @@ fn old_main() {
                 stdin: Some(stdin),
             };
             dump_logs(stdout);
-            print!("starting loop");
+            println!("starting loop");
             for line in std::io::stdin().lines() {
                 let command = line.unwrap();
                 send_command(command.trim(), &mut server).unwrap();
             }
-            print!("ending loop")
+            println!("ending loop")
         }
         Err(error) => {
-            print!("starting failed {error}")
+            println!("starting failed {error}")
         }
     }
-    print!("main exited")
+    println!("main exited")
 }
 
 fn main() {
     let mut server = ServerManager::new();
     let path = "/data/data/com.termux/files/home/servers/anvil";
     match server.start(path) {
-        Ok(_) => print!("success"),
-        Err(e) => print!("{e}"),
+        Ok(_) => println!("success"),
+        Err(e) => println!("{e}"),
     };
     for line in std::io::stdin().lines() {
         let command = line.unwrap();
