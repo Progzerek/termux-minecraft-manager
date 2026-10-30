@@ -150,5 +150,8 @@ fn old_main() {
 fn main() {
     let mut server = ServerManager::new();
     let path = "/data/data/com.termux/files/home/servers/anvil";
-    server.start(path).unwrap();
+    match server.start(path) {
+        Ok(_) => print!("success"),
+        Err(e) => print!("{e}"),
+    };
 }
