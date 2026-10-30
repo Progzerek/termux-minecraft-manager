@@ -31,6 +31,7 @@ impl ServerManager {
             State::Offline | State::Crashed => {
                 match run_sh(&server_dir) {
                     Ok(child) => {
+                        print!("Start success");
                         let mut child = child;
                         self.status = State::Starting;
                         let stdout = child
@@ -47,6 +48,7 @@ impl ServerManager {
                             .expect("Failed to pipe Server Error (stderr)");
                         self.instance = Some(child);
                         self.stdin = Some(stdin);
+                        print!("Dumping logs");
                         dump_logs(stdout);
                         dump_errors(stderr);
                     }
@@ -71,6 +73,7 @@ impl ServerManager {
 }
 
 fn run_sh(path: &str) -> std::io::Result<Child> {
+    print!("Running start command");
     let result: Result<Child, std::io::Error> = Command::new("bash")
         .arg("run.sh")
         .arg("nogui")
@@ -154,4 +157,8 @@ fn main() {
         Ok(_) => print!("success"),
         Err(e) => print!("{e}"),
     };
+    for line in std::io::stdin().lines() {
+        let command = line.unwrap();
+        send_command(command.trim(), &mut server).unwrap();
+    }
 }
