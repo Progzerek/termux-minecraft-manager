@@ -49,8 +49,8 @@ impl ServerManager {
                         self.instance = Some(child);
                         self.stdin = Some(stdin);
                         println!("Dumping logs");
-                        dump_errors(stderr);
                         dump_logs(stdout);
+                        dump_errors(stderr);
                     }
                     Err(e) => {
                         return Err(e);
@@ -67,9 +67,19 @@ impl ServerManager {
         }
     }
 
-    //fn send_command(&mut self, command: &str) -> std::io::Result<()> {
-    // writes to self.stdin
-    //}
+    fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+        let Some(stdin) = self.stdin.as_mut() else {
+            // no server / no stdin
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                "Server Input not found! Check if the server is running",
+            ));
+        };
+        let line = format!("{command}\n");
+        stdin.write_all(line.as_bytes())?;
+        stdin.flush()?;
+        Ok(())
+    }
 }
 
 fn run_sh(path: &str) -> std::io::Result<Child> {
@@ -107,49 +117,6 @@ fn dump_errors(stderr: ChildStderr) {
     });
 }
 
-fn send_command(command: &str, server: &mut ServerManager) -> std::io::Result<()> {
-    let Some(stdin) = server.stdin.as_mut() else {
-        // no server / no stdin
-        return Err(Error::new(
-            ErrorKind::NotFound,
-            "Server Input not found! Check if the server is running",
-        ));
-    };
-    let line = format!("{command}\n");
-    stdin.write_all(line.as_bytes())?;
-    stdin.flush()?;
-    Ok(())
-}
-
-fn old_main() {
-    let path = "/data/data/com.termux/files/home/servers/anvil";
-    println!("Hello, world!");
-    match run_sh(&path) {
-        Ok(mut child) => {
-            println!("Starting...");
-            let stdout = child.stdout.take().unwrap();
-            let stdin = child.stdin.take().unwrap();
-            let stderr = child.stderr.take();
-            let mut server = ServerManager {
-                instance: Some(child),
-                status: State::Starting,
-                stdin: Some(stdin),
-            };
-            dump_logs(stdout);
-            println!("starting loop");
-            for line in std::io::stdin().lines() {
-                let command = line.unwrap();
-                send_command(command.trim(), &mut server).unwrap();
-            }
-            println!("ending loop")
-        }
-        Err(error) => {
-            println!("starting failed {error}")
-        }
-    }
-    println!("main exited")
-}
-
 fn main() {
     let mut server = ServerManager::new();
     let path = "/data/data/com.termux/files/home/servers/anvil";
@@ -159,6 +126,6 @@ fn main() {
     };
     for line in std::io::stdin().lines() {
         let command = line.unwrap();
-        send_command(command.trim(), &mut server).unwrap();
+        server.send_command(command.trim()).unwrap();
     }
 }
