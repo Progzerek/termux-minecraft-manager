@@ -50,7 +50,7 @@ impl ServerManager {
                         self.stdin = Some(stdin);
                         print!("Dumping logs");
                         dump_logs(stdout);
-                        dump_errors(stderr);
+                        //dump_errors(stderr);
                     }
                     Err(e) => {
                         return Err(e);
