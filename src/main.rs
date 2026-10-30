@@ -73,13 +73,16 @@ fn main() {
                 stdin: Some(stdin),
             };
             dump_logs(stdout);
+            print!("starting loop")
             for line in std::io::stdin().lines() {
                 let command = line.unwrap();
                 send_command(command.trim(), &mut server).unwrap();
             }
+            print!("ending loop")
         }
         Err(error) => {
             print!("starting failed {error}")
         }
     }
+    print!("main exited")
 }
