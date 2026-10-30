@@ -1,8 +1,11 @@
 use std::{
-    io::{BufRead, BufReader, Stdout},
+    io::{BufRead, BufReader, Error, ErrorKind, Stdin, Stdout, Write},
+    os::unix::io,
     path::Path,
-    process::{Child, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
+
+use crate::State::Offline;
 
 enum State {
     Offline,
@@ -14,6 +17,7 @@ enum State {
 
 struct ServerManager {
     instance: Option<Child>,
+    stdin: Option<ChildStdin>,
     status: State,
 }
 
@@ -23,6 +27,7 @@ fn run_sh(path: &str) -> std::io::Result<Child> {
         .arg("nogui")
         .current_dir(path)
         .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
     result
@@ -39,6 +44,20 @@ fn dump_logs(stdout: ChildStdout) {
     });
 }
 
+fn send_command(command: &str, server: &mut ServerManager) -> std::io::Result<()> {
+    let Some(stdin) = server.stdin.as_mut() else {
+        // no server / no stdin
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            "Stdin not found! Check if the server is running",
+        ));
+    };
+    let line = format!("{command}\n");
+    stdin.write_all(line.as_bytes())?;
+    stdin.flush()?;
+    Ok(())
+}
+
 fn main() {
     let path = "/data/data/com.termux/files/home/servers/anvil";
     println!("Hello, world!");
@@ -46,9 +65,18 @@ fn main() {
         Ok(mut child) => {
             print!("Starting...");
             let stdout = child.stdout.take().unwrap();
-
-            //let stderr = child.stderr.take();
-            dump_logs(stdout)
+            let stdin = child.stdin.take().unwrap();
+            let stderr = child.stderr.take();
+            let mut server = ServerManager {
+                instance: Some(child),
+                status: State::Starting,
+                stdin: Some(stdin),
+            };
+            dump_logs(stdout);
+            for line in std::io::stdin().lines() {
+                let command = line.unwrap();
+                send_command(command.trim(), &mut server).unwrap();
+            }
         }
         Err(error) => {
             print!("starting failed {error}")
