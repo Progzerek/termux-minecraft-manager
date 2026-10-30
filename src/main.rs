@@ -49,8 +49,8 @@ impl ServerManager {
                         self.instance = Some(child);
                         self.stdin = Some(stdin);
                         println!("Dumping logs");
-                        dump_logs(stdout);
                         dump_errors(stderr);
+                        dump_logs(stdout);
                     }
                     Err(e) => {
                         return Err(e);
@@ -96,9 +96,9 @@ fn dump_logs(stdout: ChildStdout) {
     });
 }
 
-fn dump_errors(stdout: ChildStderr) {
+fn dump_errors(stderr: ChildStderr) {
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
+        let reader = BufReader::new(stderr);
 
         for line in reader.lines() {
             let line = line.expect("failed to read stderr");
