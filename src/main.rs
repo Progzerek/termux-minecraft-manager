@@ -1,11 +1,7 @@
 use std::{
-    io::{BufRead, BufReader, Error, ErrorKind, Stdin, Stdout, Write},
-    os::unix::io,
-    path::Path,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    io::{BufRead, BufReader, Error, ErrorKind, Write},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
 };
-
-use crate::State::Offline;
 
 enum State {
     Offline,
@@ -19,6 +15,59 @@ struct ServerManager {
     instance: Option<Child>,
     stdin: Option<ChildStdin>,
     status: State,
+}
+
+impl ServerManager {
+    fn new() -> Self {
+        Self {
+            instance: None,
+            stdin: None,
+            status: State::Offline,
+        }
+    }
+
+    fn start(&mut self, server_dir: &str) -> std::io::Result<()> {
+        match self.status {
+            State::Offline | State::Crashed => {
+                match run_sh(&server_dir) {
+                    Ok(child) => {
+                        let mut child = child;
+                        self.status = State::Starting;
+                        let stdout = child
+                            .stdout
+                            .take()
+                            .expect("Failed to pipe Server Output (stdout)");
+                        let stdin = child
+                            .stdin
+                            .take()
+                            .expect("Failed to pipe Server Input (stdin)");
+                        let stderr = child
+                            .stderr
+                            .take()
+                            .expect("Failed to pipe Server Error (stderr)");
+                        self.instance = Some(child);
+                        self.stdin = Some(stdin);
+                        dump_logs(stdout);
+                        dump_errors(stderr);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+                Ok(())
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::AlreadyExists,
+                    "server is already starting, running, or stopping",
+                ));
+            }
+        }
+    }
+
+    //fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+    // writes to self.stdin
+    //}
 }
 
 fn run_sh(path: &str) -> std::io::Result<Child> {
@@ -44,12 +93,23 @@ fn dump_logs(stdout: ChildStdout) {
     });
 }
 
+fn dump_errors(stdout: ChildStderr) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let line = line.expect("failed to read stderr");
+            println!("[Error] {line}");
+        }
+    });
+}
+
 fn send_command(command: &str, server: &mut ServerManager) -> std::io::Result<()> {
     let Some(stdin) = server.stdin.as_mut() else {
         // no server / no stdin
         return Err(Error::new(
             ErrorKind::NotFound,
-            "Stdin not found! Check if the server is running",
+            "Server Input not found! Check if the server is running",
         ));
     };
     let line = format!("{command}\n");
@@ -58,7 +118,7 @@ fn send_command(command: &str, server: &mut ServerManager) -> std::io::Result<()
     Ok(())
 }
 
-fn main() {
+fn old_main() {
     let path = "/data/data/com.termux/files/home/servers/anvil";
     println!("Hello, world!");
     match run_sh(&path) {
@@ -73,7 +133,7 @@ fn main() {
                 stdin: Some(stdin),
             };
             dump_logs(stdout);
-            print!("starting loop")
+            print!("starting loop");
             for line in std::io::stdin().lines() {
                 let command = line.unwrap();
                 send_command(command.trim(), &mut server).unwrap();
@@ -85,4 +145,10 @@ fn main() {
         }
     }
     print!("main exited")
+}
+
+fn main() {
+    let mut server = ServerManager::new();
+    let path = "/data/data/com.termux/files/home/servers/anvil";
+    server.start(path).unwrap();
 }
