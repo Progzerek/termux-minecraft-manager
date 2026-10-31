@@ -1,3 +1,4 @@
+mod discord_bot;
 mod minecraft;
 
 #[tokio::main]
