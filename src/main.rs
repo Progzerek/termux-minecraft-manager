@@ -153,7 +153,7 @@ fn main() -> std::io::Result<()> {
                     eprintln!("{e}");
                 }
             }
-            "exit" => return Ok(()),
+            "exit" => break,
             _ => {
                 if let Err(e) = server.send_command(command.trim()) {
                     eprintln!("{e}");
