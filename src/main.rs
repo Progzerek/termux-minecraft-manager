@@ -49,8 +49,8 @@ impl ServerManager {
                         self.instance = Some(child);
                         self.stdin = Some(stdin);
                         println!("Dumping logs");
-                        dump_logs(stdout);
-                        dump_errors(stderr);
+                        handle_logs(stdout);
+                        handle_err(stderr);
                     }
                     Err(e) => {
                         return Err(e);
@@ -80,6 +80,32 @@ impl ServerManager {
         stdin.flush()?;
         Ok(())
     }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        if self.status != State::Online {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "Server is not in a state to call stop",
+            ));
+        };
+        self.send_command("stop")?;
+        self.status = State::Stopping;
+        Ok(())
+    }
+
+    fn handle_logs(&mut self, stdout: ChildStdout) {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+
+            for line in reader.lines() {
+                let line = line.expect("failed to read stdout");
+                if line.contains("Done") && line.contains("For help, type ") {
+                    self.status = State::Online;
+                }
+                println!("[out] {line}");
+            }
+        });
+    }
 }
 
 fn run_sh(path: &str) -> std::io::Result<Child> {
@@ -95,18 +121,7 @@ fn run_sh(path: &str) -> std::io::Result<Child> {
     result
 }
 
-fn dump_logs(stdout: ChildStdout) {
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-
-        for line in reader.lines() {
-            let line = line.expect("failed to read stdout");
-            println!("[out] {line}");
-        }
-    });
-}
-
-fn dump_errors(stderr: ChildStderr) {
+fn handle_err(stderr: ChildStderr) {
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
 
