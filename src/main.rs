@@ -141,7 +141,7 @@ fn main() -> std::io::Result<()> {
         Err(e) => println!("{e}"),
     };
     for line in std::io::stdin().lines() {
-        let command = line.unwrap();
+        let command = line?;
         match command.trim() {
             "stopCMD" => {
                 if let Err(e) = server.stop() {
@@ -153,16 +153,7 @@ fn main() -> std::io::Result<()> {
                     eprintln!("{e}");
                 }
             }
-            "exit" => {
-                if server.status == State::Running {
-                    if let Err(e) = server.stop() {
-                        eprintln!("{e}");
-                        return Err(e);
-                    }
-                }
-                println!("Exiting program");
-                return Ok(());
-            }
+            "exit" => return Ok(()),
             _ => {
                 if let Err(e) = server.send_command(command.trim()) {
                     eprintln!("{e}");
@@ -170,5 +161,12 @@ fn main() -> std::io::Result<()> {
             }
         }
     }
+    if server.status == State::Running {
+        if let Err(e) = server.stop() {
+            eprintln!("{e}");
+            return Err(e);
+        }
+    }
+    println!("Exiting program");
     Ok(())
 }
