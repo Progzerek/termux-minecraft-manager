@@ -34,7 +34,7 @@ impl EventHandler for Handler {
     }
 }
 
-async fn start_loop() {
+pub async fn start_loop() -> Result<(), SerenityError> {
     // Configure the client with your Discord bot token in the environment.
     dotenvy::dotenv().expect("Failed to get .env");
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
@@ -56,5 +56,8 @@ async fn start_loop() {
     // it reconnects.
     if let Err(why) = client.start().await {
         println!("Client error: {why:?}");
+        return Err(why);
+    } else {
+        Ok(())
     }
 }
