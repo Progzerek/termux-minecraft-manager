@@ -143,11 +143,17 @@ fn main() {
     for line in std::io::stdin().lines() {
         let command = line.unwrap();
         if command == "stopCMD" {
-            server.stop().expect("stop failed");
+            if let Err(e) = server.stop() {
+                eprint!("{e}")
+            };
         } else if command == "startCMD" {
-            server.start(path).expect("start failed");
+            if let Err(e) = server.start(path) {
+                eprint!("{e}")
+            };
         } else {
-            server.send_command(command.trim()).unwrap();
+            if let Err(e) = server.send_command(command.trim()) {
+                eprint!("{e}")
+            };
         }
     }
 }
