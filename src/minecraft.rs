@@ -145,7 +145,6 @@ impl ServerManager {
         if self.status == State::Running {
             self.stop().await?;
         }
-
         println!("Exiting program");
 
         Ok(())
@@ -182,7 +181,7 @@ async fn handle_err(stderr: tokio::process::ChildStderr) {
     }
 }
 
-pub async fn init() -> std::io::Result<()> {
+pub async fn start_loop() -> std::io::Result<()> {
     let mut server = ServerManager::new();
     let path = env::var("RUN_SH_PATH").expect("Expected path in env");
     let path = path.trim().to_string();
@@ -196,6 +195,5 @@ pub async fn init() -> std::io::Result<()> {
     server.log_loop(&path).await?;
 
     server.exit().await?;
-
     Ok(())
 }
