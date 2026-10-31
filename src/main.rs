@@ -154,6 +154,12 @@ fn main() -> std::io::Result<()> {
                 }
             }
             "exit" => {
+                if server.status == State::Running {
+                    if let Err(e) = server.stop() {
+                        eprintln!("{e}");
+                        return Err(e);
+                    }
+                }
                 println!("Exiting program");
                 return Ok(());
             }
