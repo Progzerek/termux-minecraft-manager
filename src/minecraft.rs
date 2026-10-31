@@ -114,7 +114,7 @@ impl ServerManager {
             let command = line.trim();
 
             match command {
-                "stopCMD" => {
+                "stop" => {
                     if let Err(e) = self.stop().await {
                         eprintln!("{e}");
                     }
