@@ -2,13 +2,10 @@ use std::{
     io::{BufRead, BufReader, Error, ErrorKind, Write},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
 };
-
+#[derive(PartialEq)]
 enum State {
     Offline,
-    Starting,
-    Online,
-    Stopping,
-    Crashed,
+    Running,
 }
 
 struct ServerManager {
@@ -28,12 +25,12 @@ impl ServerManager {
 
     fn start(&mut self, server_dir: &str) -> std::io::Result<()> {
         match self.status {
-            State::Offline | State::Crashed => {
+            State::Offline => {
                 match run_sh(&server_dir) {
                     Ok(child) => {
                         println!("Start success");
                         let mut child = child;
-                        self.status = State::Starting;
+                        self.status = State::Running;
                         let stdout = child
                             .stdout
                             .take()
@@ -82,29 +79,17 @@ impl ServerManager {
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        if self.status != State::Online {
+        if self.status != State::Running {
             return Err(Error::new(
                 ErrorKind::PermissionDenied,
-                "Server is not in a state to call stop",
+                "Server is not Online",
             ));
         };
         self.send_command("stop")?;
-        self.status = State::Stopping;
+        while self.instance.is_some() {}
+        self.status = State::Offline;
+        println!("offline");
         Ok(())
-    }
-
-    fn handle_logs(&mut self, stdout: ChildStdout) {
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-
-            for line in reader.lines() {
-                let line = line.expect("failed to read stdout");
-                if line.contains("Done") && line.contains("For help, type ") {
-                    self.status = State::Online;
-                }
-                println!("[out] {line}");
-            }
-        });
     }
 }
 
@@ -119,6 +104,18 @@ fn run_sh(path: &str) -> std::io::Result<Child> {
         .stderr(Stdio::piped())
         .spawn();
     result
+}
+
+fn handle_logs(stdout: ChildStdout) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let line = line.expect("failed to read stdout");
+
+            println!("[out] {line}");
+        }
+    });
 }
 
 fn handle_err(stderr: ChildStderr) {
@@ -141,6 +138,10 @@ fn main() {
     };
     for line in std::io::stdin().lines() {
         let command = line.unwrap();
-        server.send_command(command.trim()).unwrap();
+        if command == "stopCMd" {
+            server.stop().expect("stop failed");
+        } else {
+            server.send_command(command.trim()).unwrap();
+        }
     }
 }
