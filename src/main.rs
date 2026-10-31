@@ -91,6 +91,7 @@ impl ServerManager {
         };
         child.wait()?;
         self.status = State::Offline;
+        self.instance = None;
         println!("offline");
         Ok(())
     }
