@@ -65,6 +65,12 @@ impl ServerManager {
     }
 
     pub async fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+        if self.status != State::Running {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Server is not Online",
+            ));
+        }
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -80,13 +86,6 @@ impl ServerManager {
     }
 
     pub async fn stop(&mut self) -> std::io::Result<()> {
-        if self.status != State::Running {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "Server is not Online",
-            ));
-        }
-
         self.send_command("stop").await?;
 
         let Some(child) = self.instance.as_mut() else {
