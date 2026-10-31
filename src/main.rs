@@ -133,7 +133,7 @@ fn handle_err(stderr: ChildStderr) {
     });
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let mut server = ServerManager::new();
     let path = "/data/data/com.termux/files/home/servers/anvil";
     match server.start(path) {
@@ -142,18 +142,27 @@ fn main() {
     };
     for line in std::io::stdin().lines() {
         let command = line.unwrap();
-        if command == "stopCMD" {
-            if let Err(e) = server.stop() {
-                eprint!("{e}")
-            };
-        } else if command == "startCMD" {
-            if let Err(e) = server.start(path) {
-                eprint!("{e}")
-            };
-        } else {
-            if let Err(e) = server.send_command(command.trim()) {
-                eprint!("{e}")
-            };
+        match command.trim() {
+            "stopCMD" => {
+                if let Err(e) = server.stop() {
+                    eprintln!("{e}");
+                }
+            }
+            "startCMD" => {
+                if let Err(e) = server.start(path) {
+                    eprintln!("{e}");
+                }
+            }
+            "exit" => {
+                println!("Exiting program");
+                return Ok(());
+            }
+            _ => {
+                if let Err(e) = server.send_command(command.trim()) {
+                    eprintln!("{e}");
+                }
+            }
         }
     }
+    Ok(())
 }
