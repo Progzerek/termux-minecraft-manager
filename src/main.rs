@@ -9,5 +9,6 @@ async fn main() -> std::io::Result<()> {
 
     minecraft::start_loop().await?;
 
-    discord.await?
+    discord.await?;
+    Ok(())
 }
