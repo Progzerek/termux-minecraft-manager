@@ -36,20 +36,26 @@ impl ServerManager {
 
         let mut child = run_sh(server_dir).await?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .expect("Failed to pipe Server Output (stdout)");
+        let stdout = child.stdout.take().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to pipe Server Output (stdout)",
+            )
+        })?;
 
-        let stderr = child
-            .stderr
-            .take()
-            .expect("Failed to pipe Server Error (stderr)");
+        let stderr = child.stderr.take().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to pipe Server Error (stderr)",
+            )
+        })?;
 
-        let server_stdin = child
-            .stdin
-            .take()
-            .expect("Failed to pipe Server Input (stdin)");
+        let server_stdin = child.stdin.take().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to pipe Server Input (stdin)",
+            )
+        })?;
 
         self.instance = Some(child);
         self.stdin = Some(server_stdin);
