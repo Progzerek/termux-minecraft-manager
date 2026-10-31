@@ -86,7 +86,10 @@ impl ServerManager {
             ));
         };
         self.send_command("stop")?;
-        while self.instance.is_some() {}
+        let Some(child) = self.instance.as_mut() else {
+            return Err(Error::new(ErrorKind::NotFound, "No server to stop!"));
+        };
+        child.wait()?;
         self.status = State::Offline;
         println!("offline");
         Ok(())
@@ -138,7 +141,7 @@ fn main() {
     };
     for line in std::io::stdin().lines() {
         let command = line.unwrap();
-        if command == "stopCMd" {
+        if command == "stopCMD" {
             server.stop().expect("stop failed");
         } else {
             server.send_command(command.trim()).unwrap();
