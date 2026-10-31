@@ -143,6 +143,8 @@ fn main() {
         let command = line.unwrap();
         if command == "stopCMD" {
             server.stop().expect("stop failed");
+        } else if command == "startCMD" {
+            server.start(path).expect("start failed");
         } else {
             server.send_command(command.trim()).unwrap();
         }
