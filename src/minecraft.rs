@@ -119,7 +119,7 @@ impl ServerManager {
                         eprintln!("{e}");
                     }
                 }
-                "startCMD" => {
+                "start" => {
                     if let Err(e) = self.start(path).await {
                         eprintln!("{e}");
                     }
