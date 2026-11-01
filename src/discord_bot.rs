@@ -175,23 +175,23 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
 }
 
 async fn handle_logs(msg: Message, ctx: Context, handler: &Handler) {
-    let mut reply = match msg.channel_id.say(&ctx.http, "*Sending logs..*").await {
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Sending logs...*").await {
         Ok(message) => message,
         Err(why) => {
             println!("Error sending message: {why:?}");
             return;
         }
     };
-    let line_count = 20;
+    let line_count = 10;
     let logs = {
         let server = handler.server.lock().await;
         server.recent_logs(line_count)
     };
-
-    let mut message = format!("Last {line_count} lines:\n```{}```", logs);
-
+    let message;
     if logs.is_empty() {
         message = format!("No logs available");
+    } else {
+        message = format!("Last {line_count} lines:\n```{}```", logs);
     }
 
     if let Err(why) = reply
