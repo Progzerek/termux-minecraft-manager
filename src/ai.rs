@@ -1,9 +1,10 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::time::Instant;
 
-const MODEL: &str = "mistralai/mistral-large-4-1t-a52b";
-const API_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
+const MODEL: &str = "qwen/qwen3.8-27b";
+const API_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 
 #[derive(Serialize)]
 struct Message {
@@ -72,15 +73,16 @@ pub async fn chat(
                 content: message.to_string(),
             },
         ],
-        max_tokens: 4096,
+        max_tokens: 2048,
         stream: false, // false so we can return the full string easily
         temperature,
-        top_p: 1.0,
+        top_p: 0.9,
         frequency_penalty: 0.0,
         presence_penalty: 0.0,
         reasoning_effort: "high",
     };
-
+    println!("sending promt, starting stopwatch");
+    let start = Instant::now();
     let response = client
         .post(API_URL)
         .header("Authorization", format!("Bearer {}", api_key))
@@ -89,7 +91,9 @@ pub async fn chat(
         .json(&payload)
         .send()
         .await?;
-
+    let duration = start.elapsed();
+    println!("got answer");
+    println!("Duration: {:?}", duration);
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await?;
