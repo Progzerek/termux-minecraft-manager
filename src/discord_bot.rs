@@ -249,6 +249,8 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
             {
                 println!("Error sending message: {why:?}");
             }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            handle_logs(msg, ctx, handler).await;
             return;
         }
         Err(e) => {
