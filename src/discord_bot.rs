@@ -37,12 +37,12 @@ impl EventHandler for Handler {
     }
 }
 
-async fn handle_buzi(msg: Message, ctx: Context) {
+async fn handle_ping(msg: Message, ctx: Context) {
     if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
         println!("Error sending message: {why:?}");
     }
 }
-async fn handle_ping(msg: Message, ctx: Context) {
+async fn handle_buzi(msg: Message, ctx: Context) {
     if let Err(why) = msg.channel_id.say(&ctx.http, "Igen bence buzi").await {
         println!("Error sending message: {why:?}");
     }
