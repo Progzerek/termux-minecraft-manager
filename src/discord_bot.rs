@@ -1,11 +1,16 @@
 use std::env;
+use std::sync::Arc;
 
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 
-struct Handler;
+use crate::minecraft::ServerManager;
+
+struct Handler {
+    server: Arc<Mutex<ServerManager>>,
+}
 
 #[async_trait]
 impl EventHandler for Handler {
@@ -22,6 +27,11 @@ impl EventHandler for Handler {
                 println!("Error sending message: {why:?}");
             }
         }
+        match msg.content.trim() {
+            "!ping" => handle_ping(msg, ctx).await,
+            "!status" => handle_status(msg, ctx, &self).await,
+            _ => {}
+        }
     }
 
     // Set a handler to be called on the `ready` event. This is called when a shard is booted, and
@@ -34,7 +44,21 @@ impl EventHandler for Handler {
     }
 }
 
-pub async fn start_loop() -> Result<(), SerenityError> {
+async fn handle_ping(msg: Message, ctx: Context) {
+    if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
+        println!("Error sending message: {why:?}");
+    }
+}
+async fn handle_status(msg: Message, ctx: Context, handler: &Handler) {
+    let server = handler.server.lock().await;
+    let status = server.status_text();
+    let message = format!("Server status: {}", status);
+    if let Err(why) = msg.channel_id.say(&ctx.http, message).await {
+        println!("Error sending message: {why:?}");
+    }
+}
+
+pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), SerenityError> {
     // Configure the client with your Discord bot token in the environment.
     dotenvy::dotenv().expect("Failed to get .env");
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
@@ -45,8 +69,11 @@ pub async fn start_loop() -> Result<(), SerenityError> {
 
     // Create a new instance of the Client, logging in as a bot. This will automatically prepend
     // your bot token with "Bot ", which is a requirement by Discord for bot users.
+    let handler = Handler {
+        server: Arc::clone(&server_arc),
+    };
     let mut client = Client::builder(&token, intents)
-        .event_handler(Handler)
+        .event_handler(handler)
         .await
         .expect("Err creating client");
 

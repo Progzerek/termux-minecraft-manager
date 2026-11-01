@@ -27,6 +27,13 @@ impl ServerManager {
         }
     }
 
+    pub fn status_text(&self) -> &'static str {
+        match self.status {
+            State::Running => "Online",
+            State::Offline => "Offline",
+        }
+    }
+
     pub async fn start(&mut self, server_dir: &str) -> std::io::Result<()> {
         if self.status != State::Offline {
             return Err(std::io::Error::new(

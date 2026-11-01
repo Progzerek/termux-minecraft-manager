@@ -8,9 +8,9 @@ mod minecraft;
 async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().expect("Expected .env file");
 
-    let discord = tokio::spawn(discord_bot::start_loop());
-
     let server = Arc::new(Mutex::new(minecraft::ServerManager::new()));
+
+    let discord = tokio::spawn(discord_bot::start_loop(Arc::clone(&server)));
 
     minecraft::start_loop(server).await?;
 
