@@ -20,12 +20,18 @@ impl EventHandler for Handler {
     //
     // Event handlers are dispatched through a threadpool, and so multiple events can be
     // dispatched simultaneously.
+
     async fn message(&self, ctx: Context, msg: Message) {
         match msg.content.trim() {
             "!ping" => handle_ping(msg, ctx).await,
             "!status" => handle_status(msg, ctx, &self).await,
             "!bence buzi?" => handle_buzi(msg, ctx).await,
             "!stop" => handle_stop(msg, ctx, &self).await,
+            "!start" => handle_start(msg, ctx, &self).await,
+            "!logs" => handle_logs(msg, ctx, &self).await,
+            command if command.starts_with("!console ") => {
+                handle_console(msg, ctx, &self).await;
+            }
             _ => {}
         }
     }
@@ -164,6 +170,86 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
                 }
                 break;
             }
+        }
+    }
+}
+
+async fn handle_logs(msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Sending logs..*").await {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+    let line_count = 20;
+    let logs = {
+        let server = handler.server.lock().await;
+        server.recent_logs(line_count)
+    };
+
+    let mut message = format!("Last {line_count} lines:\n```{}```", logs);
+
+    if logs.is_empty() {
+        message = format!("No logs available");
+    }
+
+    if let Err(why) = reply
+        .edit(&ctx.http, EditMessage::new().content(message))
+        .await
+    {
+        println!("Error sending message: {why:?}");
+    }
+}
+
+async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Sending command..*").await {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+
+    let Some(minecraft_command) = msg.content.strip_prefix("!console ") else {
+        if let Err(why) = reply
+            .edit(&ctx.http, EditMessage::new().content("No command to send"))
+            .await
+        {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    };
+    let result = {
+        let mut server = handler.server.lock().await;
+        server.send_command(minecraft_command).await
+    };
+    match result {
+        Ok(()) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new().content(format!("Command sent!")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
+        }
+        Err(e) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new().content(format!(
+                        "An error occured while sending command: \n```{e}```"
+                    )),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::{env, process::Stdio, sync::Arc};
 
 use tokio::{
@@ -14,10 +15,13 @@ enum State {
     Stopping,
 }
 
+const MAX_LOG_LINES: usize = 100;
+
 pub struct ServerManager {
     instance: Option<Child>,
     stdin: Option<ChildStdin>,
     status: State,
+    logs: VecDeque<String>,
 }
 
 impl ServerManager {
@@ -26,6 +30,7 @@ impl ServerManager {
             instance: None,
             stdin: None,
             status: State::Offline,
+            logs: VecDeque::with_capacity(100),
         }
     }
 
@@ -36,6 +41,27 @@ impl ServerManager {
             State::Starting => "Starting",
             State::Stopping => "Stopping",
         }
+    }
+
+    pub fn recent_logs(&self, count: usize) -> String {
+        self.logs
+            .iter()
+            .rev()
+            .take(count)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn push_log(&mut self, line: String) {
+        if self.logs.len() >= MAX_LOG_LINES {
+            self.logs.pop_front();
+        }
+
+        self.logs.push_back(line);
     }
 
     pub async fn start(
@@ -193,6 +219,10 @@ async fn handle_logs(stdout: tokio::process::ChildStdout, server_arc: Arc<Mutex<
 
     while let Ok(Some(line)) = lines.next_line().await {
         println!("[out] {line}");
+        {
+            let mut server = server_arc.lock().await;
+            server.push_log(line.clone());
+        }
 
         if line.contains("Done") && line.contains("For help, type") {
             let mut server = server_arc.lock().await;
