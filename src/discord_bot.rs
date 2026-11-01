@@ -22,7 +22,7 @@ impl EventHandler for Handler {
         match msg.content.trim() {
             "!ping" => handle_ping(msg, ctx).await,
             "!status" => handle_status(msg, ctx, &self).await,
-            "!bence buzi?" => handle_buzi(msg, ctx, &self).await,
+            "!bence buzi?" => handle_buzi(msg, ctx).await,
             _ => {}
         }
     }
