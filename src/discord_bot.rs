@@ -115,7 +115,7 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
             return;
         }
     };
-    let path = env::var("RUN_SH_PATH").expect("Expected server path");
+    let path = &handler.run_path;
     let result = {
         let mut server = handler.server.lock().await;
         server.start(&path, Arc::clone(&handler.server)).await
