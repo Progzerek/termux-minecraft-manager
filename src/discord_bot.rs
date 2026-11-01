@@ -243,7 +243,7 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
             if let Err(why) = reply
                 .edit(
                     &ctx.http,
-                    EditMessage::new().content(format!("Command sent!")),
+                    EditMessage::new().content(format!("{minecraft_command} command sent!")),
                 )
                 .await
             {
