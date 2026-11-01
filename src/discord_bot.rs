@@ -1,6 +1,7 @@
 use std::env;
 use std::sync::Arc;
 
+use serenity::all::EditMessage;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -23,6 +24,7 @@ impl EventHandler for Handler {
             "!ping" => handle_ping(msg, ctx).await,
             "!status" => handle_status(msg, ctx, &self).await,
             "!bence buzi?" => handle_buzi(msg, ctx).await,
+            "!stop" => handle_stop(msg, ctx, &self).await,
             _ => {}
         }
     }
@@ -54,6 +56,39 @@ async fn handle_status(msg: Message, ctx: Context, handler: &Handler) {
     if let Err(why) = msg.channel_id.say(&ctx.http, message).await {
         println!("Error sending message: {why:?}");
     }
+}
+
+async fn handle_stop(msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Stopping server...*").await {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+    let mut server = handler.server.lock().await;
+    match server.stop().await {
+        Ok(_) => {
+            if let Err(why) = reply
+                .edit(&ctx.http, EditMessage::new().content("Server stopped."))
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+        }
+        Err(e) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new()
+                        .content(format!("An error ocured while stopping: \n```{e}```")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+        }
+    };
 }
 
 pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), SerenityError> {
