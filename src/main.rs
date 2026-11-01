@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 mod discord_bot;
 mod minecraft;
 
@@ -7,7 +10,9 @@ async fn main() -> std::io::Result<()> {
 
     let discord = tokio::spawn(discord_bot::start_loop());
 
-    minecraft::start_loop().await?;
+    let server = Arc::new(Mutex::new(minecraft::ServerManager::new()));
+
+    minecraft::start_loop(server).await?;
 
     discord.await?;
     Ok(())

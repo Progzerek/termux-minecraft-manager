@@ -1,8 +1,9 @@
-use std::{env, process::Stdio};
+use std::{env, process::Stdio, sync::Arc};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin},
     process::{Child, ChildStdin, Command},
+    sync::Mutex,
 };
 
 #[derive(PartialEq)]
@@ -11,14 +12,14 @@ enum State {
     Running,
 }
 
-struct ServerManager {
+pub struct ServerManager {
     instance: Option<Child>,
     stdin: Option<ChildStdin>,
     status: State,
 }
 
 impl ServerManager {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             instance: None,
             stdin: None,
@@ -112,35 +113,6 @@ impl ServerManager {
         Ok(())
     }
 
-    pub async fn log_loop(&mut self, path: &str) -> std::io::Result<()> {
-        let mut input = BufReader::new(stdin()).lines();
-
-        while let Some(line) = input.next_line().await? {
-            let command = line.trim();
-
-            match command {
-                "stop" => {
-                    if let Err(e) = self.stop().await {
-                        eprintln!("{e}");
-                    }
-                }
-                "start" => {
-                    if let Err(e) = self.start(path).await {
-                        eprintln!("{e}");
-                    }
-                }
-                "exit" => break,
-                _ => {
-                    if let Err(e) = self.send_command(command).await {
-                        eprintln!("{e}");
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     pub async fn exit(&mut self) -> Result<(), std::io::Error> {
         if self.status == State::Running {
             self.stop().await?;
@@ -165,6 +137,41 @@ async fn run_sh(path: &str) -> std::io::Result<Child> {
         .spawn()
 }
 
+pub async fn command_loop(
+    server_arc: Arc<Mutex<ServerManager>>,
+    path: &str,
+) -> std::io::Result<()> {
+    let mut input = BufReader::new(stdin()).lines();
+
+    while let Some(line) = input.next_line().await? {
+        let command = line.trim();
+
+        match command {
+            "stop" => {
+                let mut server = server_arc.lock().await;
+                if let Err(e) = server.stop().await {
+                    eprintln!("{e}");
+                }
+            }
+            "start" => {
+                let mut server = server_arc.lock().await;
+                if let Err(e) = server.start(path).await {
+                    eprintln!("{e}");
+                }
+            }
+            "exit" => break,
+            _ => {
+                let mut server = server_arc.lock().await;
+                if let Err(e) = server.send_command(command).await {
+                    eprintln!("{e}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_logs(stdout: tokio::process::ChildStdout) {
     let mut lines = BufReader::new(stdout).lines();
 
@@ -181,19 +188,20 @@ async fn handle_err(stderr: tokio::process::ChildStderr) {
     }
 }
 
-pub async fn start_loop() -> std::io::Result<()> {
-    let mut server = ServerManager::new();
+pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> std::io::Result<()> {
     let path = env::var("RUN_SH_PATH").expect("Expected path in env");
     let path = path.trim().to_string();
+    {
+        let mut server = server_arc.lock().await;
 
-    if let Err(e) = server.start(&path).await {
-        println!("{e}");
-    } else {
-        println!("success");
+        if let Err(e) = server.start(&path).await {
+            println!("{e}");
+        } else {
+            println!("success");
+        }
     }
-
-    server.log_loop(&path).await?;
-
+    command_loop(Arc::clone(&server_arc), &path).await?;
+    let mut server = server_arc.lock().await;
     server.exit().await?;
     Ok(())
 }
