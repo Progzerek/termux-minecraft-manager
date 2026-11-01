@@ -1,5 +1,6 @@
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serenity::all::EditMessage;
 use serenity::async_trait;
@@ -66,11 +67,14 @@ async fn handle_stop(msg: Message, ctx: Context, handler: &Handler) {
             return;
         }
     };
-    let mut server = handler.server.lock().await;
-    match server.stop().await {
+    let result = {
+        let mut server = handler.server.lock().await;
+        server.stop().await
+    };
+    match result {
         Ok(_) => {
             if let Err(why) = reply
-                .edit(&ctx.http, EditMessage::new().content("Server stopped."))
+                .edit(&ctx.http, EditMessage::new().content("**Server stopped.**"))
                 .await
             {
                 println!("Error sending message: {why:?}");
@@ -81,14 +85,87 @@ async fn handle_stop(msg: Message, ctx: Context, handler: &Handler) {
                 .edit(
                     &ctx.http,
                     EditMessage::new()
-                        .content(format!("An error ocured while stopping: \n```{e}```")),
+                        .content(format!("An error occured while stopping: \n```{e}```")),
                 )
                 .await
             {
                 println!("Error sending message: {why:?}");
             }
         }
+    }
+}
+
+async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg
+        .channel_id
+        .say(&ctx.http, "**Starting server...**")
+        .await
+    {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
     };
+    let path = env::var("RUN_SH_PATH").expect("Expected server path");
+    let result = {
+        let mut server = handler.server.lock().await;
+        server.start(&path, Arc::clone(&handler.server)).await
+    };
+    match result {
+        Ok(_) => {}
+        Err(e) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new()
+                        .content(format!("An error occured while starting: \n```{e}```")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
+        }
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+
+    loop {
+        interval.tick().await;
+
+        let status = {
+            let server = handler.server.lock().await;
+            server.status_text()
+        };
+
+        match status {
+            "Online" => {
+                if let Err(why) = reply
+                    .edit(
+                        &ctx.http,
+                        EditMessage::new().content("**Server is online**"),
+                    )
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
+                }
+                break;
+            }
+            "Starting" => {}
+            _ => {
+                if let Err(why) = reply
+                    .edit(
+                        &ctx.http,
+                        EditMessage::new().content("Incorrect state detected!"),
+                    )
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
+                }
+                break;
+            }
+        }
+    }
 }
 
 pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), SerenityError> {
