@@ -12,6 +12,8 @@ use crate::minecraft::ServerManager;
 
 struct Handler {
     server: Arc<Mutex<ServerManager>>,
+    run_path: String,
+    discord_id: u64,
 }
 
 #[async_trait]
@@ -175,6 +177,12 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
 }
 
 async fn handle_logs(msg: Message, ctx: Context, handler: &Handler) {
+    if msg.author.id != handler.discord_id {
+        if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    };
     let mut reply = match msg.channel_id.say(&ctx.http, "*Sending logs...*").await {
         Ok(message) => message,
         Err(why) => {
@@ -203,6 +211,12 @@ async fn handle_logs(msg: Message, ctx: Context, handler: &Handler) {
 }
 
 async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
+    if msg.author.id != handler.discord_id {
+        if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    };
     let mut reply = match msg.channel_id.say(&ctx.http, "*Sending command..*").await {
         Ok(message) => message,
         Err(why) => {
@@ -258,6 +272,11 @@ pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), Ser
     // Configure the client with your Discord bot token in the environment.
     dotenvy::dotenv().expect("Failed to get .env");
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
+    let owner_id = env::var("OWNER_ID")
+        .expect("Expected OWNER_ID")
+        .parse::<u64>()
+        .expect("OWNER_ID must be a valid Discord user ID");
+    let path = env::var("RUN_SH_PATH").expect("Expected RUN_SH_PATH");
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
@@ -267,6 +286,8 @@ pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), Ser
     // your bot token with "Bot ", which is a requirement by Discord for bot users.
     let handler = Handler {
         server: Arc::clone(&server_arc),
+        run_path: path,
+        discord_id: owner_id,
     };
     let mut client = Client::builder(&token, intents)
         .event_handler(handler)

@@ -6,14 +6,16 @@ mod minecraft;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    dotenvy::dotenv().expect("Expected .env file");
+    dotenvy::dotenv().expect("Failed to load .env");
 
     let server = Arc::new(Mutex::new(minecraft::ServerManager::new()));
 
     let discord = tokio::spawn(discord_bot::start_loop(Arc::clone(&server)));
 
-    minecraft::start_loop(server).await?;
+    let result = minecraft::start_loop(server).await;
 
-    discord.await?;
-    Ok(())
+    discord.abort();
+    let _ = discord.await;
+
+    result
 }
