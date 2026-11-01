@@ -22,6 +22,7 @@ impl EventHandler for Handler {
         match msg.content.trim() {
             "!ping" => handle_ping(msg, ctx).await,
             "!status" => handle_status(msg, ctx, &self).await,
+            "!bence buzi?" => handle_buzi(msg, ctx, &self).await,
             _ => {}
         }
     }
@@ -38,6 +39,11 @@ impl EventHandler for Handler {
 
 async fn handle_ping(msg: Message, ctx: Context) {
     if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
+        println!("Error sending message: {why:?}");
+    }
+}
+async fn handle_ping(msg: Message, ctx: Context) {
+    if let Err(why) = msg.channel_id.say(&ctx.http, "Igen bence buzi").await {
         println!("Error sending message: {why:?}");
     }
 }
