@@ -1,6 +1,6 @@
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, result};
 
 use serenity::all::EditMessage;
 use serenity::async_trait;
@@ -36,7 +36,7 @@ impl EventHandler for Handler {
                 handle_console(msg, ctx, &self).await;
             }
             message if message.starts_with("!grok ") => {
-                handle_ai(msg, ctx, &self).await;
+                handle_ai(msg, ctx).await;
             }
             _ => {}
         }
@@ -52,7 +52,7 @@ impl EventHandler for Handler {
     }
 }
 
-async fn handle_ai(msg: Message, ctx: Context, handler: &Handler) {
+async fn handle_ai(msg: Message, ctx: Context) {
     let mut reply = match msg.channel_id.say(&ctx.http, "*Thinking...*").await {
         Ok(message) => message,
         Err(why) => {

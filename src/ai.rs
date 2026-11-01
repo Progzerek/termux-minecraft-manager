@@ -51,7 +51,7 @@ pub async fn chat(
     message: &str,
     system_prompt: &str,
     temperature: f32,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
