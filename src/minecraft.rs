@@ -9,7 +9,9 @@ use tokio::{
 #[derive(PartialEq)]
 enum State {
     Offline,
-    Running,
+    Starting,
+    Online,
+    Stopping,
 }
 
 pub struct ServerManager {
@@ -29,12 +31,18 @@ impl ServerManager {
 
     pub fn status_text(&self) -> &'static str {
         match self.status {
-            State::Running => "Online",
+            State::Online => "Online",
             State::Offline => "Offline",
+            State::Starting => "Starting",
+            State::Stopping => "Stopping",
         }
     }
 
-    pub async fn start(&mut self, server_dir: &str) -> std::io::Result<()> {
+    pub async fn start(
+        &mut self,
+        server_dir: &str,
+        server_arc: Arc<Mutex<ServerManager>>,
+    ) -> std::io::Result<()> {
         if self.status != State::Offline {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -67,19 +75,19 @@ impl ServerManager {
 
         self.instance = Some(child);
         self.stdin = Some(server_stdin);
-        self.status = State::Running;
+        self.status = State::Starting;
 
         println!("Start success");
         println!("Dumping logs");
 
-        tokio::spawn(handle_logs(stdout));
+        tokio::spawn(handle_logs(stdout, server_arc));
         tokio::spawn(handle_err(stderr));
 
         Ok(())
     }
 
     pub async fn send_command(&mut self, command: &str) -> std::io::Result<()> {
-        if self.status != State::Running {
+        if self.status != State::Online {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "Server is not Online",
@@ -101,6 +109,7 @@ impl ServerManager {
 
     pub async fn stop(&mut self) -> std::io::Result<()> {
         self.send_command("stop").await?;
+        self.status = State::Stopping;
 
         let Some(child) = self.instance.as_mut() else {
             return Err(std::io::Error::new(
@@ -121,7 +130,7 @@ impl ServerManager {
     }
 
     pub async fn exit(&mut self) -> Result<(), std::io::Error> {
-        if self.status == State::Running {
+        if self.status == State::Online {
             self.stop().await?;
         }
         println!("Exiting program");
@@ -162,7 +171,7 @@ pub async fn command_loop(
             }
             "start" => {
                 let mut server = server_arc.lock().await;
-                if let Err(e) = server.start(path).await {
+                if let Err(e) = server.start(path, Arc::clone(&server_arc)).await {
                     eprintln!("{e}");
                 }
             }
@@ -179,10 +188,14 @@ pub async fn command_loop(
     Ok(())
 }
 
-async fn handle_logs(stdout: tokio::process::ChildStdout) {
+async fn handle_logs(stdout: tokio::process::ChildStdout, server_arc: Arc<Mutex<ServerManager>>) {
     let mut lines = BufReader::new(stdout).lines();
 
     while let Ok(Some(line)) = lines.next_line().await {
+        if line.contains("Done") && line.contains("For help, type:") {
+            let mut server = server_arc.lock().await;
+            server.status = State::Online;
+        }
         println!("[out] {line}");
     }
 }
@@ -201,7 +214,7 @@ pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> std::io::Resul
     {
         let mut server = server_arc.lock().await;
 
-        if let Err(e) = server.start(&path).await {
+        if let Err(e) = server.start(&path, Arc::clone(&server_arc)).await {
             println!("{e}");
         } else {
             println!("success");
