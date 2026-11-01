@@ -1,6 +1,6 @@
-use std::env;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{env, result};
 
 use serenity::all::EditMessage;
 use serenity::async_trait;
@@ -8,6 +8,7 @@ use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 
+use crate::ai;
 use crate::minecraft::ServerManager;
 
 struct Handler {
@@ -34,6 +35,9 @@ impl EventHandler for Handler {
             command if command.starts_with("!console ") => {
                 handle_console(msg, ctx, &self).await;
             }
+            message if message.starts_with("!grok ") => {
+                handle_ai(msg, ctx, &self).await;
+            }
             _ => {}
         }
     }
@@ -45,6 +49,47 @@ impl EventHandler for Handler {
     // In this case, just print what the current user's username is.
     async fn ready(&self, _: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
+    }
+}
+
+async fn handle_ai(msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Thinking...*").await {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+    let Some(promt) = msg.content.strip_prefix("!grok ") else {
+        if let Err(why) = reply
+            .edit(&ctx.http, EditMessage::new().content("No promt to send"))
+            .await
+        {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    };
+    let answer = ai::chat(promt, "You are a funny discord bot.", 0.5).await;
+    match answer {
+        Ok(promt) => {
+            if let Err(why) = reply
+                .edit(&ctx.http, EditMessage::new().content(format!("{promt}")))
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+        }
+        Err(e) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new().content(format!("Failed to send promt: {e}")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+        }
     }
 }
 

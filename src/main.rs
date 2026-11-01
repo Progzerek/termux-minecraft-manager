@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+mod ai;
 mod discord_bot;
 mod minecraft;
 
