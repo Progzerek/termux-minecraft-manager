@@ -195,6 +195,7 @@ async fn handle_logs(stdout: tokio::process::ChildStdout, server_arc: Arc<Mutex<
         if line.contains("Done") && line.contains("For help, type:") {
             let mut server = server_arc.lock().await;
             server.status = State::Online;
+            println!("Online");
         }
         println!("[out] {line}");
     }
