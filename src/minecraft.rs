@@ -192,12 +192,15 @@ async fn handle_logs(stdout: tokio::process::ChildStdout, server_arc: Arc<Mutex<
     let mut lines = BufReader::new(stdout).lines();
 
     while let Ok(Some(line)) = lines.next_line().await {
+        println!("[out] {line}");
+
         if line.contains("Done") && line.contains("For help, type") {
             let mut server = server_arc.lock().await;
-            server.status = State::Online;
-            println!("Online");
+            if server.status == State::Starting {
+                server.status = State::Online;
+                println!("Online");
+            }
         }
-        println!("[out] {line}");
     }
 }
 
