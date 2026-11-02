@@ -62,16 +62,16 @@ async fn handle_help(msg: Message, ctx: Context) {
     *   `!stop` – **Stops** the Minecraft server.
     *   `!status` – Displays the **current status** of the server.
 ### Info & Server Commands
-    *   `!ping` – Network latency test. The bot replies with **Pong!**.
-    *   `!list` – Shows the list of **online players** (runs the `list` command).
+    *   `!ping` – Network test. The bot replies with **Pong!**.
+    *   `!list` – Shows the list of **online players**.
     *   `!tps` – Checks the server **performance / TPS** (`neoforge tps`).
-    *   `!logs` – Fetches the latest server **log files**.
-    *   `!console <command>` – Sends a direct **console command** to the server.
+    *   `!logs` – Fetches the latest server **log files**. (OP)
+    *   `!console <command>` – Sends a direct **console command** to the server. (OP)
 ### Artificial Intelligence (AI)
-    *   `!grok <prompt>` – **Grok AI chat.** The bot responds with a savage, dark-humored, single-sentence roast based on your prompt.
+    *   `!grok <prompt>` – **Grok AI chat.**.
 ### Other
     *   `!help` – Displays this **help menu**.
-    *   `!bence buzi?` – Answers one of life's greatest mysteries.
+    *   `!bence buzi?` – Answers one of life's greatest (not) mysteries.
 "#;
 
     if let Err(why) = msg.channel_id.say(&ctx.http, help).await {
