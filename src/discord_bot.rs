@@ -68,7 +68,7 @@ async fn handle_help(msg: Message, ctx: Context) {
     *   `!logs` – Fetches the latest server **log files**. (OP)
     *   `!console <command>` – Sends a direct **console command** to the server. (OP)
 ### Artificial Intelligence (AI)
-    *   `!grok <prompt>` – **Grok AI chat.**.
+    *   `!grok <prompt>` – **Grok AI chat.**
 ### Other
     *   `!help` – Displays this **help menu**.
     *   `!bence buzi?` – Answers one of life's greatest (not) mysteries.
