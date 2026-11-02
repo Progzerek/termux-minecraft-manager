@@ -32,6 +32,7 @@ impl EventHandler for Handler {
             "!stop" => handle_stop(msg, ctx, &self).await,
             "!start" => handle_start(msg, ctx, &self).await,
             "!list" => send_command("list", msg, ctx, &self).await,
+            "!help" => handle_help(msg, ctx).await,
             "!tps" => send_command("neoforge tps", msg, ctx, &self).await,
             "!logs" => handle_logs(msg, ctx, &self).await,
             command if command.starts_with("!console ") => {
@@ -51,6 +52,34 @@ impl EventHandler for Handler {
     // In this case, just print what the current user's username is.
     async fn ready(&self, _: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
+    }
+}
+
+async fn handle_help(msg: Message, ctx: Context) {
+    let help = r#"## Minecraft Server Bot Commands
+
+    ### Server Management
+    *   `!start` – **Starts** the Minecraft server.
+    *   `!stop` – **Stops** the Minecraft server.
+    *   `!status` – Displays the **current status** of the server.
+
+    ### Info & Server Commands
+    *   `!ping` – Network latency test. The bot replies with **Pong!**.
+    *   `!list` – Shows the list of **online players** (runs the `list` command).
+    *   `!tps` – Checks the server **performance / TPS** (`neoforge tps`).
+    *   `!logs` – Fetches the latest server **log files**.
+    *   `!console <command>` – Sends a direct **console command** to the server.
+
+    ### Artificial Intelligence (AI)
+    *   `!grok <prompt>` – **Grok AI chat.** The bot responds with a savage, dark-humored, single-sentence roast based on your prompt.
+
+    ### Other
+    *   `!help` – Displays this **help menu**.
+    *   `!bence buzi?` – Answers one of life's greatest mysteries.
+"#;
+
+    if let Err(why) = msg.channel_id.say(&ctx.http, help).await {
+        println!("Error sending message: {why:?}");
     }
 }
 
