@@ -31,6 +31,8 @@ impl EventHandler for Handler {
             "!bence buzi?" => handle_buzi(msg, ctx).await,
             "!stop" => handle_stop(msg, ctx, &self).await,
             "!start" => handle_start(msg, ctx, &self).await,
+            "!list" => send_command("list", msg, ctx, &self).await,
+            "!tps" => send_command("neoforge tps", msg, ctx, &self).await,
             "!logs" => handle_logs(msg, ctx, &self).await,
             command if command.starts_with("!console ") => {
                 handle_console(msg, ctx, &self).await;
@@ -89,6 +91,51 @@ async fn handle_ai(msg: Message, ctx: Context) {
             {
                 println!("Error sending message: {why:?}");
             }
+        }
+    }
+}
+
+async fn send_command(command: &'static str, msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg
+        .channel_id
+        .say(&ctx.http, format!("**Sending {command} command**"))
+        .await
+    {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+    let result = {
+        let mut server = handler.server.lock().await;
+        server.send_command(command).await
+    };
+    match result {
+        Ok(()) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new().content(format!("Command {command} sent")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            handle_logs(msg, ctx, handler).await
+        }
+        Err(e) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new()
+                        .content(format!("An error occured while starting: \n```{e}```")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
         }
     }
 }
