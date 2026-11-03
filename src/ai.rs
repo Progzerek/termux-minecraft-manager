@@ -56,8 +56,7 @@ pub async fn chat(
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    let api_key =
-        env::var("NVIDIA_API_KEY").map_err(|_| "NVIDIA_API_KEY not set in .env or environment")?;
+    let api_key = env::var("NVIDIA_API_KEY").map_err(|_| "Groq not set in .env or environment")?;
 
     let client = Client::new();
 
