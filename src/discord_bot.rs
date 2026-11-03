@@ -36,7 +36,7 @@ impl EventHandler for Handler {
             "!list" => send_command("list", msg, ctx, &self).await,
             "!help" => handle_help(msg, ctx).await,
             "!tps" => send_command("neoforge tps", msg, ctx, &self).await,
-            "!logs" => handle_logs(msg, ctx, &self, 10).await,
+            "!logs" => handle_logs(msg, ctx, &self, 10, true).await,
             command if command.starts_with("!console ") => {
                 handle_console(msg, ctx, &self).await;
             }
@@ -149,7 +149,7 @@ async fn send_command(command: &'static str, msg: Message, ctx: Context, handler
             {
                 println!("Error sending message: {why:?}");
             }
-            handle_logs(msg, ctx, handler, 1).await
+            handle_logs(msg, ctx, handler, 1, false).await
         }
         Err(e) => {
             if let Err(why) = reply
@@ -295,8 +295,14 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
     }
 }
 
-async fn handle_logs(msg: Message, ctx: Context, handler: &Handler, line_count: usize) {
-    if msg.author.id != handler.discord_id {
+async fn handle_logs(
+    msg: Message,
+    ctx: Context,
+    handler: &Handler,
+    line_count: usize,
+    need_op: bool,
+) {
+    if msg.author.id != handler.discord_id && need_op == true {
         if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
             println!("Error sending message: {why:?}");
         }
@@ -368,7 +374,7 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
                 println!("Error sending message: {why:?}");
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
-            handle_logs(msg, ctx, handler, 1).await;
+            handle_logs(msg, ctx, handler, 1, false).await;
             return;
         }
         Err(e) => {
