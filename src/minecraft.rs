@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt;
 use std::{env, process::Stdio, sync::Arc};
 
 use tokio::{
@@ -13,6 +14,39 @@ enum State {
     Starting,
     Online,
     Stopping,
+}
+
+#[derive(Debug)]
+pub enum ServerError {
+    NotOnline,
+    Busy,
+    NoProcess,
+    MissingPipe { pipe: String },
+    FailedPipe { pipe: String },
+    Io(std::io::Error),
+    CommandFailed { command: String, reason: String },
+}
+
+impl fmt::Display for ServerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ServerError::Busy => write!(f, "Server is bussy Starting/Stopping"),
+            ServerError::NotOnline => write!(f, "Server is not online"),
+            ServerError::NoProcess => write!(f, "No server process found"),
+            ServerError::MissingPipe { pipe } => write!(f, "Server pipe {pipe} is missing"),
+            ServerError::Io(error) => write!(f, "I/O error: {error}"),
+            ServerError::CommandFailed { command, reason } => {
+                write!(f, "Command {command} failed: {reason}")
+            }
+            ServerError::FailedPipe { pipe } => write!(f, "Pipe {pipe} failed"),
+        }
+    }
+}
+
+impl From<std::io::Error> for ServerError {
+    fn from(error: std::io::Error) -> Self {
+        ServerError::Io(error)
+    }
 }
 
 const MAX_LOG_LINES: usize = 100;
@@ -68,12 +102,9 @@ impl ServerManager {
         &mut self,
         server_dir: &str,
         server_arc: Arc<Mutex<ServerManager>>,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), ServerError> {
         if self.status != State::Offline {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "server is already starting, running, or stopping",
-            ));
+            return Err(ServerError::Busy);
         }
 
         let result = run_wake_lock_command(true).await;
@@ -81,25 +112,16 @@ impl ServerManager {
 
         let mut child = run_sh(server_dir).await?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to pipe Server Output (stdout)",
-            )
+        let stdout = child.stdout.take().ok_or(ServerError::FailedPipe {
+            pipe: format!("StdOut"),
         })?;
 
-        let stderr = child.stderr.take().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to pipe Server Error (stderr)",
-            )
+        let stderr = child.stderr.take().ok_or(ServerError::FailedPipe {
+            pipe: format!("StdErr"),
         })?;
 
-        let server_stdin = child.stdin.take().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to pipe Server Input (stdin)",
-            )
+        let server_stdin = child.stdin.take().ok_or(ServerError::FailedPipe {
+            pipe: format!("StdIn"),
         })?;
 
         self.instance = Some(child);
@@ -115,18 +137,14 @@ impl ServerManager {
         Ok(())
     }
 
-    pub async fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+    pub async fn send_command(&mut self, command: &str) -> Result<(), ServerError> {
         if self.status != State::Online {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "Server is not Online",
-            ));
+            return Err(ServerError::NotOnline);
         }
         let Some(stdin) = self.stdin.as_mut() else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Server Input not found! Check if the server is running",
-            ));
+            return Err(ServerError::MissingPipe {
+                pipe: format!("Stdin"),
+            });
         };
 
         let line = format!("{command}\n");
@@ -136,15 +154,12 @@ impl ServerManager {
         Ok(())
     }
 
-    pub async fn stop(&mut self) -> std::io::Result<()> {
+    pub async fn stop(&mut self) -> Result<(), ServerError> {
         self.send_command("stop").await?;
         self.status = State::Stopping;
 
         let Some(child) = self.instance.as_mut() else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "No server to stop!",
-            ));
+            return Err(ServerError::NoProcess);
         };
 
         child.wait().await?;
@@ -160,7 +175,7 @@ impl ServerManager {
         Ok(())
     }
 
-    pub async fn exit(&mut self) -> Result<(), std::io::Error> {
+    pub async fn exit(&mut self) -> Result<(), ServerError> {
         if self.status == State::Online {
             self.stop().await?;
         }
@@ -170,7 +185,7 @@ impl ServerManager {
     }
 }
 
-async fn run_sh(path: &str) -> std::io::Result<Child> {
+async fn run_sh(path: &str) -> Result<tokio::process::Child, std::io::Error> {
     println!("Running start command");
 
     Command::new("bash")
@@ -184,7 +199,7 @@ async fn run_sh(path: &str) -> std::io::Result<Child> {
         .spawn()
 }
 
-async fn run_wake_lock_command(lock: bool) -> std::io::Result<()> {
+async fn run_wake_lock_command(lock: bool) -> Result<(), ServerError> {
     let command = if lock {
         "termux-wake-lock"
     } else {
@@ -194,9 +209,10 @@ async fn run_wake_lock_command(lock: bool) -> std::io::Result<()> {
     println!("{command} sent");
 
     if !status.success() {
-        return Err(std::io::Error::other(format!(
-            "{command} exited with {status}"
-        )));
+        return Err(ServerError::CommandFailed {
+            command: format!("{command}"),
+            reason: format!("Failed"),
+        });
     }
 
     Ok(())
@@ -205,7 +221,7 @@ async fn run_wake_lock_command(lock: bool) -> std::io::Result<()> {
 pub async fn command_loop(
     server_arc: Arc<Mutex<ServerManager>>,
     path: &str,
-) -> std::io::Result<()> {
+) -> Result<(), ServerError> {
     let mut input = BufReader::new(stdin()).lines();
 
     while let Some(line) = input.next_line().await? {
@@ -265,7 +281,7 @@ async fn handle_err(stderr: tokio::process::ChildStderr) {
     }
 }
 
-pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> std::io::Result<()> {
+pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), ServerError> {
     let path = env::var("RUN_SH_PATH").expect("Expected path in env");
     let path = path.trim().to_string();
     {

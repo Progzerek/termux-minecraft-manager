@@ -6,7 +6,7 @@ mod discord_bot;
 mod minecraft;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<(), minecraft::ServerError> {
     dotenvy::dotenv().expect("Failed to load .env");
 
     let server = Arc::new(Mutex::new(minecraft::ServerManager::new()));
