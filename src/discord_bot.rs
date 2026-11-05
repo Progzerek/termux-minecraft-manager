@@ -155,8 +155,7 @@ async fn send_command(command: &'static str, msg: Message, ctx: Context, handler
             if let Err(why) = reply
                 .edit(
                     &ctx.http,
-                    EditMessage::new()
-                        .content(format!("An error occured while starting: \n```{e}```")),
+                    EditMessage::new().content(format!("An error occured: \n```{e}```")),
                 )
                 .await
             {
@@ -211,8 +210,7 @@ async fn handle_stop(msg: Message, ctx: Context, handler: &Handler) {
             if let Err(why) = reply
                 .edit(
                     &ctx.http,
-                    EditMessage::new()
-                        .content(format!("An error occured while stopping: \n```{e}```")),
+                    EditMessage::new().content(format!("An error occured: \n```{e}```")),
                 )
                 .await
             {
@@ -241,8 +239,7 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
             if let Err(why) = reply
                 .edit(
                     &ctx.http,
-                    EditMessage::new()
-                        .content(format!("An error occured while starting: \n```{e}```")),
+                    EditMessage::new().content(format!("An error occured: \n```{e}```")),
                 )
                 .await
             {
