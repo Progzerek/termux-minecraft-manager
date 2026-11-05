@@ -223,7 +223,7 @@ async fn handle_stop(msg: Message, ctx: Context, handler: &Handler) {
 }
 
 async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
-    let mut reply = match msg.channel_id.say(&ctx.http, "**initializing...**").await {
+    let mut reply = match msg.channel_id.say(&ctx.http, "**Initializing...**").await {
         Ok(message) => message,
         Err(why) => {
             println!("Error sending message: {why:?}");
