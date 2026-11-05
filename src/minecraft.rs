@@ -188,9 +188,10 @@ async fn run_wake_lock_command(lock: bool) -> std::io::Result<()> {
     let command = if lock {
         "termux-wake-lock"
     } else {
-        "termuc-wake-unlock"
+        "termux-wake-unlock"
     };
     let status = Command::new(command).status().await?;
+    println!("{command} sent");
 
     if !status.success() {
         return Err(std::io::Error::other(format!(
