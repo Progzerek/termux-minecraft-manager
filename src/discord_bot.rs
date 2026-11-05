@@ -265,7 +265,7 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
         if let Err(why) = reply
             .edit(
                 &ctx.http,
-                EditMessage::new().content(format!("**Starting server...({seconds})**")),
+                EditMessage::new().content(format!("**Starting server...(Elapsed: {seconds}s)**")),
             )
             .await
         {
