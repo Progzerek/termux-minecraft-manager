@@ -255,10 +255,22 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
             return;
         }
     }
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let mut seconds: u64 = 0;
 
     loop {
         interval.tick().await;
+        seconds += 1;
+
+        if let Err(why) = reply
+            .edit(
+                &ctx.http,
+                EditMessage::new().content(format!("**Starting server...({seconds})**")),
+            )
+            .await
+        {
+            println!("Error sending message: {why:?}");
+        }
 
         let status = {
             let server = handler.server.lock().await;
