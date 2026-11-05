@@ -76,6 +76,9 @@ impl ServerManager {
             ));
         }
 
+        let result = run_wake_lock_command(true).await;
+        println!("Failed to run wake_lock: {:?}", result);
+
         let mut child = run_sh(server_dir).await?;
 
         let stdout = child.stdout.take().ok_or_else(|| {
@@ -150,6 +153,8 @@ impl ServerManager {
         self.instance = None;
         self.stdin = None;
 
+        run_wake_lock_command(false).await?;
+
         println!("offline");
 
         Ok(())
@@ -177,6 +182,23 @@ async fn run_sh(path: &str) -> std::io::Result<Child> {
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
+}
+
+async fn run_wake_lock_command(lock: bool) -> std::io::Result<()> {
+    let command = if lock {
+        "termux-wake-lock"
+    } else {
+        "termuc-wake-unlock"
+    };
+    let status = Command::new(command).status().await?;
+
+    if !status.success() {
+        return Err(std::io::Error::other(format!(
+            "{command} exited with {status}"
+        )));
+    }
+
+    Ok(())
 }
 
 pub async fn command_loop(
