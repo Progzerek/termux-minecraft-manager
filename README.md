@@ -38,6 +38,9 @@ This is a neoforge minecraft manager specificaly made for termux with discord in
 
 # Architecture
 `minecraft.rs` - handles the server
+
 `discord.rs` - handles the discord bot
+
 `ai.rs` - handles the ai api calls
+
 `main.rs` - creates the ServerManager struct, starts the minecraft server and discord bot
