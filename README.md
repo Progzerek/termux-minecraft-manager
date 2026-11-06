@@ -2,8 +2,7 @@
 
 This is a neoforge minecraft manager specificaly made for termux with discord integration.
 
-# Main features
-## Base features
+## Server features
 - Start the neoforge server in a child process
 - Safely stop the server
 - See the logs
