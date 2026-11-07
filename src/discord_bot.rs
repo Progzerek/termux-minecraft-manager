@@ -153,7 +153,7 @@ async fn send_command(command: &'static str, msg: Message, ctx: Context, handler
                 println!("Error sending message: {why:?}");
             }
 
-            if let Err(why) = msg.channel_id.say(&ctx.http, logs).await {
+            if let Err(why) = msg.channel_id.say(&ctx.http, format!("```{logs}```")).await {
                 println!("Error sending message: {why:?}");
             }
         }
