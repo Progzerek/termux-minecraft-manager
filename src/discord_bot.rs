@@ -134,9 +134,12 @@ async fn send_command(command: &'static str, msg: Message, ctx: Context, handler
             return;
         }
     };
-    let result = {
+    let result;
+    let logs;
+    {
         let mut server = handler.server.lock().await;
-        server.send_command(command).await
+        result = server.send_command(command).await;
+        logs = server.recent_logs(1);
     };
     match result {
         Ok(()) => {
@@ -149,7 +152,10 @@ async fn send_command(command: &'static str, msg: Message, ctx: Context, handler
             {
                 println!("Error sending message: {why:?}");
             }
-            handle_logs(msg, ctx, handler, 1, false).await
+
+            if let Err(why) = msg.channel_id.say(&ctx.http, logs).await {
+                println!("Error sending message: {why:?}");
+            }
         }
         Err(e) => {
             if let Err(why) = reply
