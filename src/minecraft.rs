@@ -19,7 +19,7 @@ enum State {
 #[derive(Debug)]
 pub enum ServerError {
     NotOnline,
-    Busy,
+    NotOffline,
     NoProcess,
     MissingPipe { pipe: String },
     FailedPipe { pipe: String },
@@ -30,7 +30,7 @@ pub enum ServerError {
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ServerError::Busy => write!(f, "Server is bussy Starting/Stopping"),
+            ServerError::NotOffline => write!(f, "Server is not offline"),
             ServerError::NotOnline => write!(f, "Server is not online"),
             ServerError::NoProcess => write!(f, "No server process found"),
             ServerError::MissingPipe { pipe } => write!(f, "Server pipe {pipe} is missing"),
@@ -104,7 +104,7 @@ impl ServerManager {
         server_arc: Arc<Mutex<ServerManager>>,
     ) -> Result<(), ServerError> {
         if self.status != State::Offline {
-            return Err(ServerError::Busy);
+            return Err(ServerError::NotOffline);
         }
 
         let result = run_wake_lock_command(true).await;
