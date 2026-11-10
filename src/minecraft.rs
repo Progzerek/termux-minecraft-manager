@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::Error;
+use std::time::Duration;
 use std::{env, process::Stdio, sync::Arc};
+use tokio::time::sleep;
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin},
@@ -76,6 +77,7 @@ impl ServerManager {
             State::Offline => "Offline",
             State::Starting => "Starting",
             State::Stopping => "Stopping",
+            State::Crashed => "Exited unexpectedly",
         }
     }
 
@@ -133,10 +135,10 @@ impl ServerManager {
         println!("Start success");
         println!("Dumping logs");
 
-        tokio::spawn(handle_logs(stdout, server_arc));
+        tokio::spawn(handle_logs(stdout, Arc::clone(&server_arc)));
         tokio::spawn(handle_err(stderr));
 
-        tokio::spawn(self.supervisor_loop());
+        tokio::spawn(supervisor_loop(Arc::clone(&server_arc)));
 
         Ok(())
     }
@@ -187,32 +189,54 @@ impl ServerManager {
 
         Ok(())
     }
-    fn check_instance(mut self) -> Result<State, std::io::Error> {
+    fn check_instance(&mut self) -> Result<State, std::io::Error> {
         if let Some(child) = self.instance.as_mut() {
             match child.try_wait() {
-                Ok(Some(_)) => Ok(State::Crashed),
-                Ok(None) => Ok(State::Online),
+                Ok(Some(_)) => {
+                    self.status = State::Offline;
+                    self.instance = None;
+                    self.stdin = None;
+
+                    Ok(State::Crashed)
+                }
+                Ok(None) => Ok(self.status),
                 Err(error) => Err(error),
             }
         } else {
-            Err(Error::new(
-                std::io::ErrorKind::NotFound,
-                "No child was found",
-            ))
+            self.status = State::Offline;
+            self.instance = None;
+            self.stdin = None;
+            Ok(State::Offline)
         }
     }
 }
 
 async fn supervisor_loop(server_arc: Arc<Mutex<ServerManager>>) {
     loop {
-        if let Some(child) = server_arc.lock().await.instance {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    server_arc.lock().await.status = State::Crashed;
-                    break;
-                }
-                Ok(None) => {}
-                Err(error) => eprintln!("Couldn't check process: {error}"),
+        sleep(Duration::from_secs(1)).await;
+
+        let mut server = server_arc.lock().await;
+
+        // If there is no child, the supervisor has nothing to watch.
+        if server.instance.is_none() {
+            break;
+        }
+
+        match server.check_instance() {
+            Ok(State::Offline) => {
+                // The process exited.
+                break;
+            }
+            Ok(State::Crashed) => {
+                eprintln!("Server crashed!")
+            }
+            Ok(_) => {
+                // Process is still alive.
+                // Keep supervising.
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                break;
             }
         }
     }
