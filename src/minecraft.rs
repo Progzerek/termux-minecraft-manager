@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::io::Error;
 use std::{env, process::Stdio, sync::Arc};
 
 use tokio::{
@@ -8,12 +9,13 @@ use tokio::{
     sync::Mutex,
 };
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 enum State {
     Offline,
     Starting,
     Online,
     Stopping,
+    Crashed,
 }
 
 #[derive(Debug)]
@@ -134,6 +136,8 @@ impl ServerManager {
         tokio::spawn(handle_logs(stdout, server_arc));
         tokio::spawn(handle_err(stderr));
 
+        tokio::spawn(self.supervisor_loop());
+
         Ok(())
     }
 
@@ -182,6 +186,35 @@ impl ServerManager {
         println!("Exiting program");
 
         Ok(())
+    }
+    fn check_instance(mut self) -> Result<State, std::io::Error> {
+        if let Some(child) = self.instance.as_mut() {
+            match child.try_wait() {
+                Ok(Some(_)) => Ok(State::Crashed),
+                Ok(None) => Ok(State::Online),
+                Err(error) => Err(error),
+            }
+        } else {
+            Err(Error::new(
+                std::io::ErrorKind::NotFound,
+                "No child was found",
+            ))
+        }
+    }
+}
+
+async fn supervisor_loop(server_arc: Arc<Mutex<ServerManager>>) {
+    loop {
+        if let Some(child) = server_arc.lock().await.instance {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    server_arc.lock().await.status = State::Crashed;
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("Couldn't check process: {error}"),
+            }
+        }
     }
 }
 
