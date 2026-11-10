@@ -170,15 +170,24 @@ impl ServerManager {
 
         child.wait().await?;
 
-        self.status = State::Offline;
-        self.instance = None;
-        self.stdin = None;
-
-        run_wake_lock_command(false).await?;
+        self.clean_server().await;
 
         println!("offline");
 
         Ok(())
+    }
+
+    async fn clean_server(&mut self) {
+        self.status = State::Offline;
+        self.instance = None;
+        self.stdin = None;
+        match run_wake_lock_command(false).await {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("{e}")
+            }
+        }
+        println!("Server cleaned")
     }
 
     pub async fn exit(&mut self) -> Result<(), ServerError> {
@@ -189,23 +198,19 @@ impl ServerManager {
 
         Ok(())
     }
-    fn check_instance(&mut self) -> Result<State, std::io::Error> {
+    async fn check_instance(&mut self) -> Result<State, std::io::Error> {
         if let Some(child) = self.instance.as_mut() {
             match child.try_wait() {
                 Ok(Some(_)) => {
-                    self.status = State::Offline;
-                    self.instance = None;
-                    self.stdin = None;
+                    self.clean_server().await;
 
-                    Ok(State::Crashed)
+                    Ok(State::Offline)
                 }
                 Ok(None) => Ok(self.status),
                 Err(error) => Err(error),
             }
         } else {
-            self.status = State::Offline;
-            self.instance = None;
-            self.stdin = None;
+            self.clean_server().await;
             Ok(State::Offline)
         }
     }
@@ -222,13 +227,10 @@ async fn supervisor_loop(server_arc: Arc<Mutex<ServerManager>>) {
             break;
         }
 
-        match server.check_instance() {
+        match server.check_instance().await {
             Ok(State::Offline) => {
                 // The process exited.
                 break;
-            }
-            Ok(State::Crashed) => {
-                eprintln!("Server crashed!")
             }
             Ok(_) => {
                 // Process is still alive.
