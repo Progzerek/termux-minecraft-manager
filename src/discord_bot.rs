@@ -1,6 +1,6 @@
-use std::env;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{env, result};
 
 use serenity::all::EditMessage;
 use serenity::async_trait;
@@ -31,7 +31,8 @@ impl EventHandler for Handler {
             "!ping" => handle_ping(msg, ctx).await,
             "!status" => handle_status(msg, ctx, &self).await,
             "!bence buzi?" => handle_buzi(msg, ctx).await,
-            "!stop" => handle_stop(msg, ctx, &self).await,
+            "!stop" => handle_stop(false, msg, ctx, &self).await,
+            "!stop force" => handle_stop(true, msg, ctx, &self).await,
             "!start" => handle_start(msg, ctx, &self).await,
             "!list" => handle_list(msg, ctx, &self).await,
             "!help" => handle_help(msg, ctx).await,
@@ -145,7 +146,7 @@ async fn handle_list(msg: Message, ctx: Context, handler: &Handler) {
                     .edit(
                         &ctx.http,
                         EditMessage::new()
-                            .content(format!("Players online: {}", players.join(", "))),
+                            .content(format!("**Players online:** {}", players.join(", "))),
                     )
                     .await
                 {
@@ -155,7 +156,7 @@ async fn handle_list(msg: Message, ctx: Context, handler: &Handler) {
                 if let Err(why) = reply
                     .edit(
                         &ctx.http,
-                        EditMessage::new().content(format!("No players online")),
+                        EditMessage::new().content(format!("**No players** online")),
                     )
                     .await
                 {
@@ -241,36 +242,95 @@ async fn handle_status(msg: Message, ctx: Context, handler: &Handler) {
     }
 }
 
-async fn handle_stop(msg: Message, ctx: Context, handler: &Handler) {
-    let mut reply = match msg.channel_id.say(&ctx.http, "*Stopping server...*").await {
-        Ok(message) => message,
-        Err(why) => {
+async fn handle_stop(force: bool, msg: Message, ctx: Context, handler: &Handler) {
+    if force && msg.author.id != handler.discord_id {
+        if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
             println!("Error sending message: {why:?}");
-            return;
         }
+        return;
     };
-    let result = {
-        let mut server = handler.server.lock().await;
-        server.stop().await
-    };
-    match result {
-        Ok(_) => {
-            if let Err(why) = reply
-                .edit(&ctx.http, EditMessage::new().content("**Server stopped.**"))
-                .await
-            {
+    if !force {
+        let mut reply = match msg
+            .channel_id
+            .say(&ctx.http, format!("**Looking for players online...**"))
+            .await
+        {
+            Ok(message) => message,
+            Err(why) => {
                 println!("Error sending message: {why:?}");
+                return;
             }
-        }
-        Err(e) => {
+        };
+
+        let result = {
+            let mut server = handler.server.lock().await;
+            server.get_players().await
+        };
+
+        let players = match result {
+            Ok(players) => players,
+            Err(e) => {
+                if let Err(why) = reply
+                    .edit(
+                        &ctx.http,
+                        EditMessage::new().content(format!("An error occured: \n```{e}```")),
+                    )
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
+                }
+                return;
+            }
+        };
+
+        if !players.is_empty() {
             if let Err(why) = reply
                 .edit(
                     &ctx.http,
-                    EditMessage::new().content(format!("An error occured: \n```{e}```")),
+                    EditMessage::new().content(format!(
+                        "**Can't stop, players are still online: {}**",
+                        players.join(", ")
+                    )),
                 )
                 .await
             {
                 println!("Error sending message: {why:?}");
+                return;
+            }
+            return;
+        };
+
+        if let Err(why) = reply
+            .edit(
+                &ctx.http,
+                EditMessage::new().content("**Stopping server...**"),
+            )
+            .await
+        {
+            let result = {
+                let mut server = handler.server.lock().await;
+                server.stop().await
+            };
+            match result {
+                Ok(_) => {
+                    if let Err(why) = reply
+                        .edit(&ctx.http, EditMessage::new().content("**Server stopped.**"))
+                        .await
+                    {
+                        println!("Error sending message: {why:?}");
+                    }
+                }
+                Err(e) => {
+                    if let Err(why) = reply
+                        .edit(
+                            &ctx.http,
+                            EditMessage::new().content(format!("An error occured: \n```{e}```")),
+                        )
+                        .await
+                    {
+                        println!("Error sending message: {why:?}");
+                    }
+                }
             }
         }
     }
