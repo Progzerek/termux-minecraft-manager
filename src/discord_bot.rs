@@ -1,6 +1,6 @@
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, result};
 
 use serenity::all::EditMessage;
 use serenity::async_trait;
@@ -243,25 +243,33 @@ async fn handle_status(msg: Message, ctx: Context, handler: &Handler) {
 }
 
 async fn handle_stop(force: bool, msg: Message, ctx: Context, handler: &Handler) {
-    if force && msg.author.id != handler.discord_id {
-        if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
+    let initial = if force {
+        "**Force stopping server...**"
+    } else {
+        "**Checking if stop is possible...**"
+    };
+    let mut reply = match msg.channel_id.say(&ctx.http, format!("{initial}")).await {
+        Ok(message) => message,
+        Err(why) => {
             println!("Error sending message: {why:?}");
+            return;
         }
-        return;
+    };
+    if force {
+        if msg.author.id != handler.discord_id {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new().content(format!("You are not OP")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
+        }
     };
     if !force {
-        let mut reply = match msg
-            .channel_id
-            .say(&ctx.http, format!("**Looking for players online...**"))
-            .await
-        {
-            Ok(message) => message,
-            Err(why) => {
-                println!("Error sending message: {why:?}");
-                return;
-            }
-        };
-
         let result = {
             let mut server = handler.server.lock().await;
             server.get_players().await
@@ -299,37 +307,39 @@ async fn handle_stop(force: bool, msg: Message, ctx: Context, handler: &Handler)
             }
             return;
         };
-
-        if let Err(why) = reply
-            .edit(
-                &ctx.http,
-                EditMessage::new().content("**Stopping server...**"),
-            )
-            .await
-        {
-            let result = {
-                let mut server = handler.server.lock().await;
-                server.stop().await
-            };
-            match result {
-                Ok(_) => {
-                    if let Err(why) = reply
-                        .edit(&ctx.http, EditMessage::new().content("**Server stopped.**"))
-                        .await
-                    {
-                        println!("Error sending message: {why:?}");
-                    }
+    }
+    if let Err(why) = reply
+        .edit(
+            &ctx.http,
+            EditMessage::new().content("**Stopping server...**"),
+        )
+        .await
+    {
+        println!("Error sending message: {why:?}");
+    }
+    {
+        let result = {
+            let mut server = handler.server.lock().await;
+            server.stop().await
+        };
+        match result {
+            Ok(_) => {
+                if let Err(why) = reply
+                    .edit(&ctx.http, EditMessage::new().content("**Server stopped.**"))
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
                 }
-                Err(e) => {
-                    if let Err(why) = reply
-                        .edit(
-                            &ctx.http,
-                            EditMessage::new().content(format!("An error occured: \n```{e}```")),
-                        )
-                        .await
-                    {
-                        println!("Error sending message: {why:?}");
-                    }
+            }
+            Err(e) => {
+                if let Err(why) = reply
+                    .edit(
+                        &ctx.http,
+                        EditMessage::new().content(format!("An error occured: \n```{e}```")),
+                    )
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
                 }
             }
         }
