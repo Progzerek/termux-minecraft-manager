@@ -33,7 +33,7 @@ impl EventHandler for Handler {
             "!bence buzi?" => handle_buzi(msg, ctx).await,
             "!stop" => handle_stop(msg, ctx, &self).await,
             "!start" => handle_start(msg, ctx, &self).await,
-            "!list" => send_command("list", msg, ctx, &self).await,
+            "!list" => handle_list(msg, ctx, &self).await,
             "!help" => handle_help(msg, ctx).await,
             "!tps" => send_command("neoforge tps", msg, ctx, &self).await,
             "!logs" => handle_logs(msg, ctx, &self, 10, true).await,
@@ -118,6 +118,62 @@ async fn handle_ai(msg: Message, ctx: Context) {
             {
                 println!("Error sending message: {why:?}");
             }
+        }
+    }
+}
+
+async fn handle_list(msg: Message, ctx: Context, handler: &Handler) {
+    let mut reply = match msg
+        .channel_id
+        .say(&ctx.http, format!("**Sending list command**"))
+        .await
+    {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+    let result = {
+        let mut server = handler.server.lock().await;
+        server.get_players().await
+    };
+    match result {
+        Ok(players) => {
+            if !players.is_empty() {
+                if let Err(why) = reply
+                    .edit(
+                        &ctx.http,
+                        EditMessage::new()
+                            .content(format!("Players online: {}", players.join(", "))),
+                    )
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
+                }
+            } else {
+                if let Err(why) = reply
+                    .edit(
+                        &ctx.http,
+                        EditMessage::new().content(format!("No players online")),
+                    )
+                    .await
+                {
+                    println!("Error sending message: {why:?}");
+                }
+            }
+        }
+        Err(e) => {
+            if let Err(why) = reply
+                .edit(
+                    &ctx.http,
+                    EditMessage::new().content(format!("An error occured: \n```{e}```")),
+                )
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
         }
     }
 }

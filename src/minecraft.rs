@@ -214,6 +214,34 @@ impl ServerManager {
             Ok(State::Offline)
         }
     }
+    pub async fn get_players(&mut self) -> Result<Vec<String>, ServerError> {
+        self.send_command("list").await?;
+        sleep(Duration::from_millis(100)).await;
+
+        for line in self.logs.iter().rev() {
+            if line.contains("players online:") {
+                return Ok(parse_players_line(line));
+            }
+        }
+
+        Ok(Vec::new())
+    }
+}
+
+fn parse_players_line(line: &str) -> Vec<String> {
+    if let Some((_, players_str)) = line.split_once("players online:") {
+        let trimmed = players_str.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        trimmed
+            .split(',')
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    }
 }
 
 async fn supervisor_loop(server_arc: Arc<Mutex<ServerManager>>) {
