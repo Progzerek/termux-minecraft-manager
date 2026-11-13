@@ -193,7 +193,7 @@ async fn send_command(command: &'static str, msg: Message, ctx: Context, handler
     };
     let result = {
         let mut server = handler.server.lock().await;
-        server.send_command(command).await
+        server.send_console_command(command).await
     };
     match result {
         Ok(()) => {
@@ -235,7 +235,7 @@ async fn handle_buzi(msg: Message, ctx: Context) {
 }
 async fn handle_status(msg: Message, ctx: Context, handler: &Handler) {
     let server = handler.server.lock().await;
-    let status = server.status_text();
+    let status = server.state_text();
     let message = format!("Server status: {}", status);
     if let Err(why) = msg.channel_id.say(&ctx.http, message).await {
         println!("Error sending message: {why:?}");
@@ -393,7 +393,7 @@ async fn handle_start(msg: Message, ctx: Context, handler: &Handler) {
 
         let status = {
             let server = handler.server.lock().await;
-            server.status_text()
+            server.state_text()
         };
 
         match status {
@@ -491,7 +491,7 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
     };
     let result = {
         let mut server = handler.server.lock().await;
-        server.send_command(minecraft_command).await
+        server.send_console_command(minecraft_command).await
     };
     match result {
         Ok(()) => {
