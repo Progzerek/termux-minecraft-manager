@@ -78,7 +78,7 @@ async fn handle_help(msg: Message, ctx: Context) {
     *   `!start` – **Starts** the Minecraft server.
     *   `!stop` – **Stops** the Minecraft server.
     *   `!status` – Displays the **current status** of the server.
-    *   `!backup` – Creates a **world backup**. (OP)
+    *   `!backup` – Creates a **world backup**; refuses if players are online. (OP)
 ### Info & Server Commands
     *   `!ping` – Network test. The bot replies with **Pong!**.
     *   `!list` – Shows the list of **online players**.
@@ -541,6 +541,13 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
     }
 }
 
+fn backup_notification(content: impl Into<String>) -> CreateMessage {
+    CreateMessage::new()
+        .content(content)
+        .flags(MessageFlags::SUPPRESS_NOTIFICATIONS)
+        .allowed_mentions(CreateAllowedMentions::new())
+}
+
 async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
     if msg.author.id != handler.discord_id {
         if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
@@ -577,7 +584,31 @@ async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
         }
     };
 
-    let content = match backup::perform_backup(&handler.server, &config).await {
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<backup::BackupProgress>();
+    let http = ctx.http.clone();
+    let mut progress_message = reply.clone();
+
+    let editor = tokio::spawn(async move {
+        while let Some(progress) = progress_rx.recv().await {
+            if let Err(why) = progress_message
+                .edit(&http, EditMessage::new().content(progress.message()))
+                .await
+            {
+                println!("Error editing backup progress: {why:?}");
+            }
+        }
+    });
+
+    let progress_sink: backup::ProgressSink = Arc::new(move |progress| {
+        let _ = progress_tx.send(progress);
+    });
+
+    let result = backup::perform_backup(&handler.server, &config, true, Some(progress_sink)).await;
+
+    let _ = editor.await;
+
+    let content = match result {
         Ok(outcome) => {
             let size = outcome.bytes as f64 / 1024.0 / 1024.0;
             let restart = if outcome.restarted {
@@ -591,6 +622,10 @@ async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
                 outcome.archive.display()
             )
         }
+        Err(backup::BackupError::PlayersOnline(players)) => format!(
+            "**Backup not started, players are online:** {}",
+            players.join(", ")
+        ),
         Err(error) => format!("Backup failed: \n```{error}```"),
     };
 
@@ -690,6 +725,7 @@ pub async fn start_loop(
     tokio::spawn(async move {
         let owner = UserId::new(owner_id);
         let mut dm_channel = None;
+        let mut backup_message: Option<Message> = None;
 
         while let Some(event) = event_rx.recv().await {
             match event {
@@ -728,22 +764,57 @@ pub async fn start_loop(
                         dm_channel = None;
                     }
                 }
+                ServerEvent::BackupProgress { message } => {
+                    let Some(channel_id) = notify_channel else {
+                        continue;
+                    };
+
+                    if let Some(progress_message) = backup_message.as_mut() {
+                        if let Err(why) = progress_message
+                            .edit(&http, EditMessage::new().content(&message))
+                            .await
+                        {
+                            println!("Error editing backup progress: {why:?}");
+                            backup_message = None;
+                        }
+                    } else {
+                        match ChannelId::new(channel_id)
+                            .send_message(&http, backup_notification(&message))
+                            .await
+                        {
+                            Ok(sent) => backup_message = Some(sent),
+                            Err(why) => println!("Error sending backup progress: {why:?}"),
+                        }
+                    }
+                }
                 ServerEvent::BackupFinished { message } => {
                     let Some(channel_id) = notify_channel else {
                         println!("{message}");
                         continue;
                     };
 
-                    let builder = CreateMessage::new()
-                        .content(message)
-                        .flags(MessageFlags::SUPPRESS_NOTIFICATIONS)
-                        .allowed_mentions(CreateAllowedMentions::new());
+                    let channel = ChannelId::new(channel_id);
 
-                    if let Err(why) = ChannelId::new(channel_id)
-                        .send_message(&http, builder)
-                        .await
-                    {
-                        println!("Error sending backup notification: {why:?}");
+                    match backup_message.take() {
+                        Some(mut progress_message) => {
+                            if let Err(why) = progress_message
+                                .edit(&http, EditMessage::new().content(&message))
+                                .await
+                            {
+                                println!("Error editing backup notification: {why:?}");
+                                let _ = channel
+                                    .send_message(&http, backup_notification(message))
+                                    .await;
+                            }
+                        }
+                        None => {
+                            if let Err(why) = channel
+                                .send_message(&http, backup_notification(message))
+                                .await
+                            {
+                                println!("Error sending backup notification: {why:?}");
+                            }
+                        }
                     }
                 }
             }

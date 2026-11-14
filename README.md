@@ -19,7 +19,7 @@ This is a neoforge minecraft manager specificaly made for termux with discord in
   
   `!status` – Displays the **current status** of the server.
   
-  `!backup` – Creates a **world backup**. (OP)
+  `!backup` – Creates a **world backup**. Refuses to run while players are online. (OP)
 ### Info & Server Commands
   `!ping` – Network test. The bot replies with **Pong!**.
   
@@ -48,6 +48,8 @@ This is a neoforge minecraft manager specificaly made for termux with discord in
 - Optionally set `BACKUP_TIME` in `HH:MM` format (default `05:00`).
 - The server warns players 5 minutes and 1 minute before the backup, stops, zips the `world` folder, restarts if it was running, and keeps the last 14 archives.
 - Backups are disabled when `BACKUP_DIR` is empty.
+- While the zip is being created, live progress (percent, size, file count, current file) is posted to `NOTIFY_CHANNEL_ID`; `!backup` edits its own reply instead.
+- `!backup` checks RCON for online players first and refuses to start if anyone is online. If the check fails, the backup is not started and the error is shown.
 
 # Architecture
 `minecraft.rs` - handles the server

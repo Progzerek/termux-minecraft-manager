@@ -50,6 +50,7 @@ impl ServerState {
 pub enum ServerEvent {
     Crashed(ExitStatus),
     Chat { player: String, message: String },
+    BackupProgress { message: String },
     BackupFinished { message: String },
 }
 
