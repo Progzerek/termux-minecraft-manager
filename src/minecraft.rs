@@ -2,10 +2,16 @@ use std::{collections::VecDeque, env, fmt, process::Stdio, sync::Arc, time::Dura
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin},
+    net::TcpStream,
     process::{Child, ChildStdin, Command},
     sync::Mutex,
-    time::sleep,
+    time::{sleep, timeout},
 };
+
+const MAX_LOG_LINES: usize = 100;
+const RCON_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const RCON_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+const RCON_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +46,7 @@ pub enum ServerError {
     MissingPipe { pipe: String },
     FailedPipe { pipe: String },
     Io(std::io::Error),
+    Rcon(String),
     CommandFailed { command: String, reason: String },
 }
 
@@ -56,6 +63,7 @@ impl fmt::Display for ServerError {
                 write!(f, "Server pipe {pipe} failed")
             }
             ServerError::Io(error) => write!(f, "I/O error: {error}"),
+            ServerError::Rcon(reason) => write!(f, "RCON error: {reason}"),
             ServerError::CommandFailed { command, reason } => {
                 write!(f, "Command {command} failed: {reason}")
             }
@@ -63,13 +71,13 @@ impl fmt::Display for ServerError {
     }
 }
 
+impl std::error::Error for ServerError {}
+
 impl From<std::io::Error> for ServerError {
     fn from(error: std::io::Error) -> Self {
         ServerError::Io(error)
     }
 }
-
-const MAX_LOG_LINES: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Server manager
@@ -80,6 +88,13 @@ pub struct ServerManager {
     stdin: Option<ChildStdin>,
     state: ServerState,
     logs: VecDeque<String>,
+    rcon: Option<rcon::Connection<TcpStream>>,
+}
+
+impl Default for ServerManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ServerManager {
@@ -89,6 +104,7 @@ impl ServerManager {
             stdin: None,
             state: ServerState::Offline,
             logs: VecDeque::with_capacity(MAX_LOG_LINES),
+            rcon: None,
         }
     }
 
@@ -150,6 +166,7 @@ impl ServerManager {
 
         self.process = Some(child);
         self.stdin = Some(stdin);
+        self.rcon = None;
         self.state = ServerState::Starting;
 
         println!("Server process started");
@@ -168,6 +185,7 @@ impl ServerManager {
 
         self.send_console_command("stop").await?;
         self.state = ServerState::Stopping;
+        self.rcon = None;
 
         let Some(process) = self.process.as_mut() else {
             return Err(ServerError::NoProcess);
@@ -195,6 +213,7 @@ impl ServerManager {
         self.state = ServerState::Offline;
         self.process = None;
         self.stdin = None;
+        self.rcon = None;
 
         if let Err(error) = run_wake_lock(false).await {
             eprintln!("{error}");
@@ -227,18 +246,82 @@ impl ServerManager {
     }
 
     pub async fn get_players(&mut self) -> Result<Vec<String>, ServerError> {
-        self.send_console_command("list").await?;
+        let response = self.send_rcon("list").await?;
+        Ok(parse_player_names(&response))
+    }
 
-        // Give the server a moment to write its response to stdout.
-        sleep(Duration::from_millis(100)).await;
+    // -----------------------------------------------------------------------
+    // RCON
+    // -----------------------------------------------------------------------
 
-        for line in self.logs.iter().rev() {
-            if line.contains("players online:") {
-                return Ok(parse_player_names(line));
+    /// Checks the existing connection or connects lazily.
+    pub async fn init_rcon(&mut self) -> Result<(), ServerError> {
+        if self.state != ServerState::Online {
+            return Err(ServerError::NotOnline);
+        }
+
+        // Take ownership so cancellation also discards a connection that may
+        // have an unfinished request.
+        if let Some(mut connection) = self.rcon.take() {
+            let healthy = matches!(
+                timeout(RCON_CHECK_TIMEOUT, connection.cmd("list")).await,
+                Ok(Ok(_))
+            );
+
+            if healthy {
+                self.rcon = Some(connection);
+                return Ok(());
             }
         }
 
-        Ok(Vec::new())
+        let address = env::var("RCON_ADDRESS")
+            .map_err(|_| ServerError::Rcon("RCON_ADDRESS is missing".into()))?;
+
+        let password = env::var("RCON_PASSWORD")
+            .map_err(|_| ServerError::Rcon("RCON_PASSWORD is missing".into()))?;
+
+        let connection = timeout(
+            RCON_CONNECT_TIMEOUT,
+            rcon::Connection::<TcpStream>::connect(address.trim(), &password),
+        )
+        .await
+        .map_err(|_| ServerError::Rcon("Connection timed out".into()))?
+        .map_err(|error| ServerError::Rcon(error.to_string()))?;
+
+        self.rcon = Some(connection);
+
+        Ok(())
+    }
+
+    /// Sends a command, lazily connecting or reconnecting beforehand.
+    ///
+    /// Failed commands are not automatically resent because they might have
+    /// already executed before the connection failed.
+    pub async fn send_rcon(&mut self, command: &str) -> Result<String, ServerError> {
+        self.init_rcon().await?;
+
+        let mut connection = self
+            .rcon
+            .take()
+            .ok_or_else(|| ServerError::Rcon("Connection was not initialized".into()))?;
+
+        match timeout(RCON_COMMAND_TIMEOUT, connection.cmd(command)).await {
+            Ok(Ok(response)) => {
+                self.rcon = Some(connection);
+                Ok(response)
+            }
+
+            Ok(Err(error)) => Err(ServerError::Rcon(format!(
+                "{error}; command outcome may be unknown, \
+                 next call will reconnect"
+            ))),
+
+            Err(_) => Err(ServerError::Rcon(
+                "Command timed out; command outcome may be unknown, \
+                 next call will reconnect"
+                    .into(),
+            )),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -256,7 +339,7 @@ impl ServerManager {
                 self.state = ServerState::Crashed;
                 self.cleanup().await;
 
-                Ok(ServerState::Offline)
+                Ok(ServerState::Crashed)
             }
             None => Ok(self.state),
         }
@@ -272,16 +355,12 @@ fn parse_player_names(line: &str) -> Vec<String> {
         return Vec::new();
     };
 
-    let player_names = player_names.trim();
-
-    if player_names.is_empty() {
-        return Vec::new();
-    }
-
     player_names
+        .trim()
         .split(',')
-        .map(|name| name.trim().to_string())
+        .map(str::trim)
         .filter(|name| !name.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
@@ -336,6 +415,7 @@ async fn supervise_server(server: Arc<Mutex<ServerManager>>) {
 
         match server.check_process().await {
             Ok(ServerState::Offline) => break,
+            Ok(ServerState::Crashed) => break,
             Ok(_) => {}
             Err(error) => {
                 eprintln!("Server supervision failed: {error}");
@@ -354,18 +434,15 @@ async fn read_server_stdout(
     while let Ok(Some(line)) = lines.next_line().await {
         println!("[stdout] {line}");
 
+        let mut server = server.lock().await;
+        server.push_log(line.clone());
+
+        if line.contains("Done")
+            && line.contains("For help, type")
+            && server.state == ServerState::Starting
         {
-            let mut server = server.lock().await;
-            server.push_log(line.clone());
-        }
-
-        if line.contains("Done") && line.contains("For help, type") {
-            let mut server = server.lock().await;
-
-            if server.state == ServerState::Starting {
-                server.state = ServerState::Online;
-                println!("Server is online");
-            }
+            server.state = ServerState::Online;
+            println!("Server is online");
         }
     }
 }
@@ -383,6 +460,8 @@ async fn read_server_stderr(stderr: tokio::process::ChildStderr) {
 // ---------------------------------------------------------------------------
 
 pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), ServerError> {
+    dotenvy::dotenv().ok();
+
     let server_dir = env::var("RUN_SH_PATH")
         .expect("RUN_SH_PATH environment variable is required")
         .trim()
@@ -416,6 +495,8 @@ async fn command_loop(
         let command = line.trim();
 
         match command {
+            "" => continue,
+
             "start" => {
                 let mut server_l = server.lock().await;
 
@@ -423,6 +504,7 @@ async fn command_loop(
                     eprintln!("{error}");
                 }
             }
+
             "stop" => {
                 let mut server = server.lock().await;
 
@@ -430,7 +512,9 @@ async fn command_loop(
                     eprintln!("{error}");
                 }
             }
+
             "exit" => break,
+
             command => {
                 let mut server = server.lock().await;
 
