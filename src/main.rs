@@ -10,8 +10,11 @@ async fn main() -> Result<(), minecraft::ServerError> {
     dotenvy::dotenv().expect("Failed to load .env");
 
     let server = Arc::new(Mutex::new(minecraft::ServerManager::new()));
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let discord = tokio::spawn(discord_bot::start_loop(Arc::clone(&server)));
+    server.lock().await.set_crash_notifier(notify_tx);
+
+    let discord = tokio::spawn(discord_bot::start_loop(Arc::clone(&server), notify_rx));
 
     let result = minecraft::start_loop(server).await;
 

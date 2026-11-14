@@ -1,10 +1,16 @@
-use std::{collections::VecDeque, env, fmt, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    env, fmt,
+    process::{ExitStatus, Stdio},
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin},
     net::TcpStream,
     process::{Child, ChildStdin, Command},
-    sync::Mutex,
+    sync::{Mutex, mpsc::UnboundedSender},
     time::{sleep, timeout},
 };
 
@@ -89,6 +95,7 @@ pub struct ServerManager {
     state: ServerState,
     logs: VecDeque<String>,
     rcon: Option<rcon::Connection<TcpStream>>,
+    notify_tx: Option<UnboundedSender<ExitStatus>>,
 }
 
 impl Default for ServerManager {
@@ -105,7 +112,12 @@ impl ServerManager {
             state: ServerState::Offline,
             logs: VecDeque::with_capacity(MAX_LOG_LINES),
             rcon: None,
+            notify_tx: None,
         }
+    }
+
+    pub fn set_crash_notifier(&mut self, tx: UnboundedSender<ExitStatus>) {
+        self.notify_tx = Some(tx);
     }
 
     pub fn state(&self) -> ServerState {
@@ -328,20 +340,25 @@ impl ServerManager {
     // Process supervision
     // -----------------------------------------------------------------------
 
-    async fn check_process(&mut self) -> Result<ServerState, std::io::Error> {
+    async fn check_process(&mut self) -> Result<(ServerState, Option<ExitStatus>), std::io::Error> {
         let Some(process) = self.process.as_mut() else {
             self.cleanup().await;
-            return Ok(ServerState::Offline);
+            return Ok((ServerState::Offline, None));
         };
 
         match process.try_wait()? {
-            Some(_) => {
-                self.state = ServerState::Crashed;
+            Some(status) => {
+                let expected = self.state == ServerState::Stopping;
+
                 self.cleanup().await;
 
-                Ok(ServerState::Crashed)
+                if expected {
+                    Ok((ServerState::Offline, None))
+                } else {
+                    Ok((ServerState::Crashed, Some(status)))
+                }
             }
-            None => Ok(self.state),
+            None => Ok((self.state, None)),
         }
     }
 }
@@ -414,8 +431,14 @@ async fn supervise_server(server: Arc<Mutex<ServerManager>>) {
         }
 
         match server.check_process().await {
-            Ok(ServerState::Offline) => break,
-            Ok(ServerState::Crashed) => break,
+            Ok((ServerState::Offline, _)) => break,
+            Ok((ServerState::Crashed, status)) => {
+                if let (Some(tx), Some(status)) = (server.notify_tx.as_ref(), status) {
+                    let _ = tx.send(status);
+                }
+
+                break;
+            }
             Ok(_) => {}
             Err(error) => {
                 eprintln!("Server supervision failed: {error}");

@@ -1,12 +1,14 @@
 use std::env;
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serenity::all::EditMessage;
+use serenity::all::{ChannelId, EditMessage};
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::ai;
 use crate::minecraft::ServerManager;
@@ -525,7 +527,10 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
     }
 }
 
-pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), SerenityError> {
+pub async fn start_loop(
+    server_arc: Arc<Mutex<ServerManager>>,
+    mut notify_rx: UnboundedReceiver<ExitStatus>,
+) -> Result<(), SerenityError> {
     // Configure the client with your Discord bot token in the environment.
     dotenvy::dotenv().expect("Failed to get .env");
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
@@ -534,6 +539,9 @@ pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), Ser
         .parse::<u64>()
         .expect("OWNER_ID must be a valid Discord user ID");
     let path = env::var("RUN_SH_PATH").expect("Expected RUN_SH_PATH");
+    let notify_channel = env::var("NOTIFY_CHANNEL_ID")
+        .ok()
+        .and_then(|id| id.trim().parse::<u64>().ok());
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
@@ -550,6 +558,24 @@ pub async fn start_loop(server_arc: Arc<Mutex<ServerManager>>) -> Result<(), Ser
         .event_handler(handler)
         .await
         .expect("Err creating client");
+
+    if let Some(channel_id) = notify_channel {
+        let http = client.http.clone();
+
+        tokio::spawn(async move {
+            while let Some(status) = notify_rx.recv().await {
+                if let Err(why) = ChannelId::new(channel_id)
+                    .say(&http, format!("Server exited unexpectedly ({status})"))
+                    .await
+                {
+                    println!("Error sending crash notification: {why:?}");
+                }
+            }
+        });
+    } else {
+        drop(notify_rx);
+        println!("NOTIFY_CHANNEL_ID not set; crash notifications disabled");
+    }
 
     // Finally, start a single shard, and start listening to events.
     //
