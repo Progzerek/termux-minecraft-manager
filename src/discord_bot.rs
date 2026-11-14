@@ -1,8 +1,11 @@
 use std::env;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serenity::all::{ChannelId, EditMessage, UserId};
+use serenity::all::{
+    ChannelId, CreateAllowedMentions, CreateMessage, EditMessage, MessageFlags, UserId,
+};
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -10,6 +13,7 @@ use serenity::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::ai;
+use crate::backup;
 use crate::minecraft::{ServerEvent, ServerManager};
 
 struct Handler {
@@ -39,6 +43,7 @@ impl EventHandler for Handler {
             "!help" => handle_help(msg, ctx).await,
             "!tps" => send_command("neoforge tps", msg, ctx, &self).await,
             "!logs" => handle_logs(msg, ctx, &self, 10, true).await,
+            "!backup" => handle_backup(msg, ctx, &self).await,
             "!say" => {
                 if let Err(why) = msg.channel_id.say(&ctx.http, "No message to send").await {
                     println!("Error sending message: {why:?}");
@@ -73,6 +78,7 @@ async fn handle_help(msg: Message, ctx: Context) {
     *   `!start` – **Starts** the Minecraft server.
     *   `!stop` – **Stops** the Minecraft server.
     *   `!status` – Displays the **current status** of the server.
+    *   `!backup` – Creates a **world backup**. (OP)
 ### Info & Server Commands
     *   `!ping` – Network test. The bot replies with **Pong!**.
     *   `!list` – Shows the list of **online players**.
@@ -535,6 +541,67 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
     }
 }
 
+async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
+    if msg.author.id != handler.discord_id {
+        if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    }
+
+    let config = match backup::load_config(Path::new(&handler.run_path)) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            if let Err(why) = msg.channel_id.say(&ctx.http, "BACKUP_DIR is not set").await {
+                println!("Error sending message: {why:?}");
+            }
+            return;
+        }
+        Err(error) => {
+            if let Err(why) = msg
+                .channel_id
+                .say(&ctx.http, format!("Backup configuration error: {error}"))
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+            return;
+        }
+    };
+
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Starting backup...*").await {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+
+    let content = match backup::perform_backup(&handler.server, &config).await {
+        Ok(outcome) => {
+            let size = outcome.bytes as f64 / 1024.0 / 1024.0;
+            let restart = if outcome.restarted {
+                "server restarted"
+            } else {
+                "server left offline"
+            };
+
+            format!(
+                "**Backup completed:** `{}` ({size:.1} MB), {restart}",
+                outcome.archive.display()
+            )
+        }
+        Err(error) => format!("Backup failed: \n```{error}```"),
+    };
+
+    if let Err(why) = reply
+        .edit(&ctx.http, EditMessage::new().content(content))
+        .await
+    {
+        println!("Error sending message: {why:?}");
+    }
+}
+
 async fn handle_say(msg: Message, ctx: Context, handler: &Handler) {
     if msg.author.id != handler.discord_id {
         if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
@@ -659,6 +726,24 @@ pub async fn start_loop(
                     {
                         println!("Error sending chat notification: {why:?}");
                         dm_channel = None;
+                    }
+                }
+                ServerEvent::BackupFinished { message } => {
+                    let Some(channel_id) = notify_channel else {
+                        println!("{message}");
+                        continue;
+                    };
+
+                    let builder = CreateMessage::new()
+                        .content(message)
+                        .flags(MessageFlags::SUPPRESS_NOTIFICATIONS)
+                        .allowed_mentions(CreateAllowedMentions::new());
+
+                    if let Err(why) = ChannelId::new(channel_id)
+                        .send_message(&http, builder)
+                        .await
+                    {
+                        println!("Error sending backup notification: {why:?}");
                     }
                 }
             }

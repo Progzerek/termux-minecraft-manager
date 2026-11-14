@@ -29,6 +29,7 @@ pub enum ServerState {
     Starting,
     Online,
     Stopping,
+    BackingUp,
     Crashed,
 }
 
@@ -39,6 +40,7 @@ impl ServerState {
             ServerState::Starting => "Starting",
             ServerState::Online => "Online",
             ServerState::Stopping => "Stopping",
+            ServerState::BackingUp => "Backing up",
             ServerState::Crashed => "Exited unexpectedly",
         }
     }
@@ -48,6 +50,7 @@ impl ServerState {
 pub enum ServerEvent {
     Crashed(ExitStatus),
     Chat { player: String, message: String },
+    BackupFinished { message: String },
 }
 
 #[derive(Debug)]
@@ -124,6 +127,20 @@ impl ServerManager {
 
     pub fn set_event_sender(&mut self, tx: UnboundedSender<ServerEvent>) {
         self.event_tx = Some(tx);
+    }
+
+    pub fn begin_backup(&mut self) -> Result<(), ServerError> {
+        if self.state != ServerState::Offline {
+            return Err(ServerError::NotOffline);
+        }
+
+        self.state = ServerState::BackingUp;
+
+        Ok(())
+    }
+
+    pub fn finish_backup(&mut self) {
+        self.state = ServerState::Offline;
     }
 
     pub fn state(&self) -> ServerState {
@@ -493,10 +510,10 @@ async fn read_server_stdout(
         let mut server = server.lock().await;
         server.push_log(line.clone());
 
-        if let Some((player, message)) = parse_chat_line(&line) {
-            if let Some(tx) = server.event_tx.as_ref() {
-                let _ = tx.send(ServerEvent::Chat { player, message });
-            }
+        if let Some((player, message)) = parse_chat_line(&line)
+            && let Some(tx) = server.event_tx.as_ref()
+        {
+            let _ = tx.send(ServerEvent::Chat { player, message });
         }
 
         if line.contains("Done")
