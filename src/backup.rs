@@ -1,8 +1,11 @@
 use std::{
+    collections::HashMap,
     env, fmt, fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::Arc,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -20,6 +23,12 @@ const BACKUP_RETENTION: usize = 14;
 const WARNING_LEAD_MINUTES: i64 = 5;
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Compression level passed to the system `zip` binary.
+const DEFAULT_ZIP_LEVEL: u8 = 1;
+
+/// Files that are already compressed; the archiver stores them instead of deflating.
+const STORED_SUFFIXES: [&str; 4] = [".mca", ".dat", ".ldb", ".sst"];
 
 #[derive(Debug, Clone)]
 pub struct BackupConfig {
@@ -423,7 +432,7 @@ fn write_archive(
 ) -> Result<ArchiveFile, BackupError> {
     fs::create_dir_all(backup_dir)?;
 
-    let (files_total, bytes_total) = measure_directory(world_dir)?;
+    let (files_total, bytes_total, sizes) = measure_directory(world_dir)?;
     let mut reporter = ProgressReporter {
         on_progress,
         files_total,
@@ -439,37 +448,209 @@ fn write_archive(
     let final_path = backup_dir.join(format!("world-{stamp}.zip"));
     let temp_path = backup_dir.join(format!("world-{stamp}.zip.tmp"));
 
-    let result = (|| {
-        let file = fs::File::create(&temp_path)?;
-        let mut zip = ZipWriter::new(file);
-        let options = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated)
-            .unix_permissions(0o644);
-
-        add_directory(&mut zip, world_dir, world_dir, options, &mut reporter)?;
-        reporter.emit(true, "");
-
-        let file = zip
-            .finish()
-            .map_err(|error| BackupError::Zip(error.to_string()))?;
-        file.sync_all()?;
-        drop(file);
-
-        fs::rename(&temp_path, &final_path)?;
-        let bytes = fs::metadata(&final_path)?.len();
-
-        Ok::<_, BackupError>(ArchiveFile {
-            path: final_path.clone(),
-            bytes,
-            removed: 0,
-        })
-    })();
+    let result = archive_to(world_dir, &temp_path, &sizes, &mut reporter).and_then(|()| {
+        on_progress(BackupProgress::Phase("flushing to disk"));
+        finalize_archive(&temp_path, &final_path)
+    });
 
     if result.is_err() {
         let _ = fs::remove_file(&temp_path);
+        let _ = fs::remove_file(appended_zip_path(&temp_path));
     }
 
     result
+}
+
+/// Builds the archive with the system `zip` binary, falling back to the built-in writer if
+/// Info-ZIP is not installed. The external binary is far faster: it is compiled for the device,
+/// runs at level 1, and stores already-compressed files instead of deflating them.
+fn archive_to(
+    world_dir: &Path,
+    archive_path: &Path,
+    sizes: &HashMap<String, u64>,
+    reporter: &mut ProgressReporter<'_>,
+) -> Result<(), BackupError> {
+    match run_external_zip(world_dir, archive_path, sizes, reporter) {
+        Ok(()) => {}
+        Err(ZipRun::Unavailable(reason)) => {
+            eprintln!(
+                "System `zip` unavailable ({reason}); using the slower built-in archiver. \
+                 Install Info-ZIP with: pkg install zip"
+            );
+            let _ = fs::remove_file(archive_path);
+            write_archive_native(world_dir, archive_path, reporter)?;
+        }
+        Err(ZipRun::Failed(error)) => return Err(error),
+    }
+
+    reporter.emit(true, "");
+
+    Ok(())
+}
+
+enum ZipRun {
+    Unavailable(String),
+    Failed(BackupError),
+}
+
+fn run_external_zip(
+    world_dir: &Path,
+    archive_path: &Path,
+    sizes: &HashMap<String, u64>,
+    reporter: &mut ProgressReporter<'_>,
+) -> Result<(), ZipRun> {
+    let binary = env::var("BACKUP_ZIP_BIN").unwrap_or_else(|_| "zip".to_string());
+    let level = zip_level();
+
+    let root_name = world_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| {
+            ZipRun::Failed(BackupError::InvalidDestination(format!(
+                "cannot archive {}",
+                world_dir.display()
+            )))
+        })?;
+
+    let working_dir = match world_dir.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+
+    let mut child = Command::new(&binary)
+        .current_dir(working_dir)
+        .arg("-r")
+        .arg(format!("-{level}"))
+        .arg("-n")
+        .arg(STORED_SUFFIXES.join(":"))
+        .arg(archive_path)
+        .arg(&root_name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| ZipRun::Unavailable(format!("{binary}: {error}")))?;
+
+    // Drain stderr in the background so a chatty `zip` can never block on a full pipe.
+    let stderr = child.stderr.take().map(|mut stream| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = stream.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ZipRun::Failed(BackupError::Zip("could not read zip output".to_string())))?;
+
+    for line in BufReader::new(stdout).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+
+        if let Some(name) = archive_entry_name(&line) {
+            let bytes = sizes.get(name).copied().unwrap_or_default();
+            reporter.add_bytes(bytes, name);
+            reporter.file_done(name);
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| ZipRun::Failed(BackupError::Io(error)))?;
+
+    let stderr = stderr
+        .and_then(|handle| handle.join().ok())
+        .map(|buffer| String::from_utf8_lossy(&buffer).into_owned())
+        .unwrap_or_default();
+
+    if !status.success() {
+        return Err(ZipRun::Failed(BackupError::Zip(format!(
+            "zip exited with {status}: {}",
+            stderr.trim().lines().last().unwrap_or("no output")
+        ))));
+    }
+
+    Ok(())
+}
+
+/// Extracts the entry name from an Info-ZIP progress line such as
+/// `  adding: world/region/r.0.0.mca (deflated 3%)`.
+fn archive_entry_name(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let rest = line
+        .strip_prefix("adding: ")
+        .or_else(|| line.strip_prefix("updating: "))?;
+    let name = &rest[..rest.rfind(" (")?];
+
+    (!name.ends_with('/')).then_some(name)
+}
+
+fn zip_level() -> u8 {
+    env::var("BACKUP_ZIP_LEVEL")
+        .ok()
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        .filter(|level| *level <= 9)
+        .unwrap_or(DEFAULT_ZIP_LEVEL)
+}
+
+fn finalize_archive(temp_path: &Path, final_path: &Path) -> Result<ArchiveFile, BackupError> {
+    // Info-ZIP appends ".zip" when the archive name has no extension; tolerate that.
+    let produced = if temp_path.exists() {
+        temp_path.to_path_buf()
+    } else {
+        let appended = appended_zip_path(temp_path);
+
+        if appended.exists() {
+            appended
+        } else {
+            return Err(BackupError::Zip(
+                "zip did not create an archive".to_string(),
+            ));
+        }
+    };
+
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&produced)?
+        .sync_all()?;
+    fs::rename(&produced, final_path)?;
+
+    Ok(ArchiveFile {
+        path: final_path.to_path_buf(),
+        bytes: fs::metadata(final_path)?.len(),
+        removed: 0,
+    })
+}
+
+fn appended_zip_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".zip");
+    PathBuf::from(name)
+}
+
+fn write_archive_native(
+    world_dir: &Path,
+    archive_path: &Path,
+    reporter: &mut ProgressReporter<'_>,
+) -> Result<(), BackupError> {
+    let root_name = world_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "world".to_string());
+
+    let file = fs::File::create(archive_path)?;
+    let mut zip = ZipWriter::new(file);
+    add_directory(&mut zip, world_dir, world_dir, &root_name, reporter)?;
+
+    let file = zip
+        .finish()
+        .map_err(|error| BackupError::Zip(error.to_string()))?;
+    file.sync_all()?;
+
+    Ok(())
 }
 
 struct ProgressReporter<'a> {
@@ -515,7 +696,7 @@ fn add_directory(
     zip: &mut ZipWriter<fs::File>,
     root: &Path,
     directory: &Path,
-    options: SimpleFileOptions,
+    root_name: &str,
     reporter: &mut ProgressReporter<'_>,
 ) -> Result<(), BackupError> {
     for entry in fs::read_dir(directory)? {
@@ -525,14 +706,22 @@ fn add_directory(
         let relative = path
             .strip_prefix(root)
             .map_err(|error| BackupError::Zip(error.to_string()))?;
-        let name = format!("world/{}", relative.to_string_lossy().replace('\\', "/"));
+        let name = format!(
+            "{root_name}/{}",
+            relative.to_string_lossy().replace('\\', "/")
+        );
 
         if metadata.is_dir() {
-            zip.add_directory(format!("{name}/"), options.unix_permissions(0o755))
-                .map_err(|error| BackupError::Zip(error.to_string()))?;
-            add_directory(zip, root, &path, options, reporter)?;
+            zip.add_directory(
+                format!("{name}/"),
+                SimpleFileOptions::default()
+                    .compression_method(CompressionMethod::Stored)
+                    .unix_permissions(0o755),
+            )
+            .map_err(|error| BackupError::Zip(error.to_string()))?;
+            add_directory(zip, root, &path, root_name, reporter)?;
         } else if metadata.is_file() {
-            zip.start_file(name.clone(), options)
+            zip.start_file(name.clone(), file_options(&name))
                 .map_err(|error| BackupError::Zip(error.to_string()))?;
 
             let mut source = fs::File::open(&path)?;
@@ -556,9 +745,27 @@ fn add_directory(
     Ok(())
 }
 
-fn measure_directory(root: &Path) -> Result<(usize, u64), BackupError> {
+fn file_options(name: &str) -> SimpleFileOptions {
+    let options = SimpleFileOptions::default().unix_permissions(0o644);
+
+    if STORED_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)) {
+        options.compression_method(CompressionMethod::Stored)
+    } else {
+        options
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(i64::from(DEFAULT_ZIP_LEVEL)))
+    }
+}
+
+fn measure_directory(root: &Path) -> Result<(usize, u64, HashMap<String, u64>), BackupError> {
+    let root_name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "world".to_string());
+
     let mut files = 0;
     let mut bytes = 0;
+    let mut sizes = HashMap::new();
     let mut pending = vec![root.to_path_buf()];
 
     while let Some(directory) = pending.pop() {
@@ -570,13 +777,22 @@ fn measure_directory(root: &Path) -> Result<(usize, u64), BackupError> {
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|error| BackupError::Zip(error.to_string()))?;
+                let name = format!(
+                    "{root_name}/{}",
+                    relative.to_string_lossy().replace('\\', "/")
+                );
+
                 files += 1;
                 bytes += metadata.len();
+                sizes.insert(name, metadata.len());
             }
         }
     }
 
-    Ok((files, bytes))
+    Ok((files, bytes, sizes))
 }
 
 fn prune_old_backups(backup_dir: &Path, keep: usize) -> Result<usize, BackupError> {
@@ -813,5 +1029,59 @@ mod tests {
                 .message()
                 .contains("stopping server")
         );
+    }
+
+    #[test]
+    fn parses_info_zip_progress_lines() {
+        assert_eq!(
+            archive_entry_name("  adding: world/region/r.0.0.mca (deflated 3%)"),
+            Some("world/region/r.0.0.mca")
+        );
+        assert_eq!(
+            archive_entry_name("  updating: world/level.dat (stored 0%)"),
+            Some("world/level.dat")
+        );
+        assert_eq!(
+            archive_entry_name("  adding: world/region/ (stored 0%)"),
+            None
+        );
+        assert_eq!(
+            archive_entry_name("zip warning: name not matched: nope"),
+            None
+        );
+    }
+
+    #[test]
+    fn finalize_archive_renames_and_reports_size() {
+        let root = test_dir("finalize");
+        let temp = root.join("world-20260101-000000.zip.tmp");
+        let final_path = root.join("world-20260101-000000.zip");
+
+        fs::write(&temp, b"archive-bytes").unwrap();
+
+        let archive = finalize_archive(&temp, &final_path).unwrap();
+
+        assert!(!temp.exists());
+        assert_eq!(archive.path, final_path);
+        assert_eq!(archive.bytes, 13);
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn finalize_archive_accepts_zip_appended_name() {
+        let root = test_dir("finalize-appended");
+        let temp = root.join("world-20260101-000001.zip.tmp");
+        let final_path = root.join("world-20260101-000001.zip");
+        let appended = appended_zip_path(&temp);
+
+        fs::write(&appended, b"archive").unwrap();
+
+        let archive = finalize_archive(&temp, &final_path).unwrap();
+
+        assert!(!appended.exists());
+        assert_eq!(archive.bytes, 7);
+
+        fs::remove_dir_all(root).ok();
     }
 }

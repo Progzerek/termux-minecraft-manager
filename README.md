@@ -44,8 +44,10 @@ This is a neoforge minecraft manager specificaly made for termux with discord in
 - You have to provide the API, that supports the OpenAi format
 
 ## Backups
+- Requires Info-ZIP: `pkg install zip`. Backups use the system `zip` binary, which is much faster than the built-in archiver; if `zip` is missing, a slower built-in writer is used as a fallback.
 - Set `BACKUP_DIR` to the folder where daily world archives should be stored.
 - Optionally set `BACKUP_TIME` in `HH:MM` format (default `05:00`).
+- Optionally set `BACKUP_ZIP_LEVEL` (0-9, default `1`). Already-compressed files (`.mca`, `.dat`, `.ldb`, `.sst`) are always stored without deflating.
 - The server warns players 5 minutes and 1 minute before the backup, stops, zips the `world` folder, restarts if it was running, and keeps the last 14 archives.
 - Backups are disabled when `BACKUP_DIR` is empty.
 - While the zip is being created, live progress (percent, size, file count, current file) is posted to `NOTIFY_CHANNEL_ID`; `!backup` edits its own reply instead.
