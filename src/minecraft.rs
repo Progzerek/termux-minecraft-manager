@@ -45,6 +45,12 @@ impl ServerState {
 }
 
 #[derive(Debug)]
+pub enum ServerEvent {
+    Crashed(ExitStatus),
+    Chat { player: String, message: String },
+}
+
+#[derive(Debug)]
 pub enum ServerError {
     NotOnline,
     NotOffline,
@@ -95,7 +101,7 @@ pub struct ServerManager {
     state: ServerState,
     logs: VecDeque<String>,
     rcon: Option<rcon::Connection<TcpStream>>,
-    notify_tx: Option<UnboundedSender<ExitStatus>>,
+    event_tx: Option<UnboundedSender<ServerEvent>>,
 }
 
 impl Default for ServerManager {
@@ -112,12 +118,12 @@ impl ServerManager {
             state: ServerState::Offline,
             logs: VecDeque::with_capacity(MAX_LOG_LINES),
             rcon: None,
-            notify_tx: None,
+            event_tx: None,
         }
     }
 
-    pub fn set_crash_notifier(&mut self, tx: UnboundedSender<ExitStatus>) {
-        self.notify_tx = Some(tx);
+    pub fn set_event_sender(&mut self, tx: UnboundedSender<ServerEvent>) {
+        self.event_tx = Some(tx);
     }
 
     pub fn state(&self) -> ServerState {
@@ -381,6 +387,33 @@ fn parse_player_names(line: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_chat_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+
+    let content = if let Some((_, rest)) = line.split_once("]: ") {
+        rest.trim()
+    } else if line.starts_with('<') {
+        line
+    } else if let Some(index) = line.find("[Not Secure] ") {
+        line[index + "[Not Secure] ".len()..].trim()
+    } else {
+        return None;
+    };
+
+    let content = content
+        .strip_prefix("[Not Secure] ")
+        .unwrap_or(content)
+        .trim();
+    let (player, message) = content.strip_prefix('<')?.split_once("> ")?;
+    let player = player.trim();
+
+    if player.is_empty() || player.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    Some((player.to_string(), message.trim().to_string()))
+}
+
 async fn start_server_process(server_dir: &str) -> Result<Child, std::io::Error> {
     println!("Starting server process");
 
@@ -433,8 +466,8 @@ async fn supervise_server(server: Arc<Mutex<ServerManager>>) {
         match server.check_process().await {
             Ok((ServerState::Offline, _)) => break,
             Ok((ServerState::Crashed, status)) => {
-                if let (Some(tx), Some(status)) = (server.notify_tx.as_ref(), status) {
-                    let _ = tx.send(status);
+                if let (Some(tx), Some(status)) = (server.event_tx.as_ref(), status) {
+                    let _ = tx.send(ServerEvent::Crashed(status));
                 }
 
                 break;
@@ -459,6 +492,12 @@ async fn read_server_stdout(
 
         let mut server = server.lock().await;
         server.push_log(line.clone());
+
+        if let Some((player, message)) = parse_chat_line(&line) {
+            if let Some(tx) = server.event_tx.as_ref() {
+                let _ = tx.send(ServerEvent::Chat { player, message });
+            }
+        }
 
         if line.contains("Done")
             && line.contains("For help, type")

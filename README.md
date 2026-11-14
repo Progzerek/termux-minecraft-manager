@@ -9,6 +9,7 @@ This is a neoforge minecraft manager specificaly made for termux with discord in
 - Write  commands to the server console
 ## Discord features
 - Send commands to the bot with the `!` prefix
+- Minecraft chat messages are forwarded to `OWNER_ID` via direct message
 - Optionally notify a channel when the server exits unexpectedly (`NOTIFY_CHANNEL_ID`)
 ### Server Management
   `!start` – **Starts** the Minecraft server.
@@ -24,6 +25,8 @@ This is a neoforge minecraft manager specificaly made for termux with discord in
   `!tps` – Checks the server **performance / TPS** (`neoforge tps`).
   
   `!logs` – Fetches the latest server **log files**. (OP)
+  
+  `!say <message>` – Sends a chat **message** to the Minecraft server. (OP)
   
   `!console <command>` – Sends a direct **console command** to the server. (OP)
 ### AI

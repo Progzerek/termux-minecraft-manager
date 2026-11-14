@@ -1,9 +1,8 @@
 use std::env;
-use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serenity::all::{ChannelId, EditMessage};
+use serenity::all::{ChannelId, EditMessage, UserId};
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -11,7 +10,7 @@ use serenity::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::ai;
-use crate::minecraft::ServerManager;
+use crate::minecraft::{ServerEvent, ServerManager};
 
 struct Handler {
     server: Arc<Mutex<ServerManager>>,
@@ -40,6 +39,14 @@ impl EventHandler for Handler {
             "!help" => handle_help(msg, ctx).await,
             "!tps" => send_command("neoforge tps", msg, ctx, &self).await,
             "!logs" => handle_logs(msg, ctx, &self, 10, true).await,
+            "!say" => {
+                if let Err(why) = msg.channel_id.say(&ctx.http, "No message to send").await {
+                    println!("Error sending message: {why:?}");
+                }
+            }
+            command if command.starts_with("!say ") => {
+                handle_say(msg, ctx, &self).await;
+            }
             command if command.starts_with("!console ") => {
                 handle_console(msg, ctx, &self).await;
             }
@@ -71,6 +78,7 @@ async fn handle_help(msg: Message, ctx: Context) {
     *   `!list` – Shows the list of **online players**.
     *   `!tps` – Checks the server **performance / TPS** (`neoforge tps`).
     *   `!logs` – Fetches the latest server **log files**. (OP)
+    *   `!say <message>` – Sends a chat **message** to the Minecraft server. (OP)
     *   `!console <command>` – Sends a direct **console command** to the server. (OP)
 ### Artificial Intelligence (AI)
     *   `!grok <prompt>` – **Grok AI chat.**
@@ -527,9 +535,56 @@ async fn handle_console(msg: Message, ctx: Context, handler: &Handler) {
     }
 }
 
+async fn handle_say(msg: Message, ctx: Context, handler: &Handler) {
+    if msg.author.id != handler.discord_id {
+        if let Err(why) = msg.channel_id.say(&ctx.http, "You are not OP").await {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    }
+
+    let Some(text) = msg.content.strip_prefix("!say ") else {
+        return;
+    };
+    let text = text.trim().replace(['\n', '\r'], " ");
+
+    if text.is_empty() {
+        if let Err(why) = msg.channel_id.say(&ctx.http, "No message to send").await {
+            println!("Error sending message: {why:?}");
+        }
+        return;
+    }
+
+    let mut reply = match msg.channel_id.say(&ctx.http, "*Sending message...*").await {
+        Ok(message) => message,
+        Err(why) => {
+            println!("Error sending message: {why:?}");
+            return;
+        }
+    };
+
+    let command = format!("say {text}");
+    let result = {
+        let mut server = handler.server.lock().await;
+        server.send_console_command(&command).await
+    };
+
+    let content = match result {
+        Ok(()) => format!("**Message sent:** {text}"),
+        Err(e) => format!("An error occured while sending message: \n```{e}```"),
+    };
+
+    if let Err(why) = reply
+        .edit(&ctx.http, EditMessage::new().content(content))
+        .await
+    {
+        println!("Error sending message: {why:?}");
+    }
+}
+
 pub async fn start_loop(
     server_arc: Arc<Mutex<ServerManager>>,
-    mut notify_rx: UnboundedReceiver<ExitStatus>,
+    mut event_rx: UnboundedReceiver<ServerEvent>,
 ) -> Result<(), SerenityError> {
     // Configure the client with your Discord bot token in the environment.
     dotenvy::dotenv().expect("Failed to get .env");
@@ -559,23 +614,56 @@ pub async fn start_loop(
         .await
         .expect("Err creating client");
 
-    if let Some(channel_id) = notify_channel {
-        let http = client.http.clone();
-
-        tokio::spawn(async move {
-            while let Some(status) = notify_rx.recv().await {
-                if let Err(why) = ChannelId::new(channel_id)
-                    .say(&http, format!("Server exited unexpectedly ({status})"))
-                    .await
-                {
-                    println!("Error sending crash notification: {why:?}");
-                }
-            }
-        });
-    } else {
-        drop(notify_rx);
+    if notify_channel.is_none() {
         println!("NOTIFY_CHANNEL_ID not set; crash notifications disabled");
     }
+
+    let http = client.http.clone();
+
+    tokio::spawn(async move {
+        let owner = UserId::new(owner_id);
+        let mut dm_channel = None;
+
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                ServerEvent::Crashed(status) => {
+                    let Some(channel_id) = notify_channel else {
+                        continue;
+                    };
+
+                    if let Err(why) = ChannelId::new(channel_id)
+                        .say(&http, format!("Server exited unexpectedly ({status})"))
+                        .await
+                    {
+                        println!("Error sending crash notification: {why:?}");
+                    }
+                }
+                ServerEvent::Chat { player, message } => {
+                    if dm_channel.is_none() {
+                        match owner.create_dm_channel(&http).await {
+                            Ok(channel) => dm_channel = Some(channel),
+                            Err(why) => {
+                                println!("Error creating direct message channel: {why:?}");
+                                continue;
+                            }
+                        }
+                    }
+
+                    let Some(channel) = dm_channel.as_ref() else {
+                        continue;
+                    };
+
+                    if let Err(why) = channel
+                        .say(&http, format!("**<{player}>** {message}"))
+                        .await
+                    {
+                        println!("Error sending chat notification: {why:?}");
+                        dm_channel = None;
+                    }
+                }
+            }
+        }
+    });
 
     // Finally, start a single shard, and start listening to events.
     //
