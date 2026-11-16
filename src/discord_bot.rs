@@ -13,7 +13,7 @@ use serenity::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::ai;
-use crate::backup_ai;
+use crate::backup;
 use crate::minecraft::{ServerEvent, ServerManager};
 
 struct Handler {
@@ -556,7 +556,7 @@ async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
         return;
     }
 
-    let config = match backup_ai::load_config(Path::new(&handler.run_path)) {
+    let config = match backup::load_config(Path::new(&handler.run_path)) {
         Ok(Some(config)) => config,
         Ok(None) => {
             if let Err(why) = msg.channel_id.say(&ctx.http, "BACKUP_DIR is not set").await {
@@ -585,7 +585,7 @@ async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
     };
 
     let (progress_tx, mut progress_rx) =
-        tokio::sync::mpsc::unbounded_channel::<backup_ai::BackupProgress>();
+        tokio::sync::mpsc::unbounded_channel::<backup::BackupProgress>();
     let http = ctx.http.clone();
     let mut progress_message = reply.clone();
 
@@ -600,11 +600,11 @@ async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
         }
     });
 
-    let progress_sink: backup_ai::ProgressSink = Arc::new(move |progress| {
+    let progress_sink: backup::ProgressSink = Arc::new(move |progress| {
         let _ = progress_tx.send(progress);
     });
 
-    let result = backup_ai::perform_backup(&handler.server, &config, true, Some(progress_sink)).await;
+    let result = backup::perform_backup(&handler.server, &config, true, Some(progress_sink)).await;
 
     let _ = editor.await;
 
@@ -622,7 +622,7 @@ async fn handle_backup(msg: Message, ctx: Context, handler: &Handler) {
                 outcome.archive.display()
             )
         }
-        Err(backup_ai::BackupError::PlayersOnline(players)) => format!(
+        Err(backup::BackupError::PlayersOnline(players)) => format!(
             "**Backup not started, players are online:** {}",
             players.join(", ")
         ),
