@@ -446,7 +446,7 @@ async fn start_server_process(server_dir: &str) -> Result<Child, std::io::Error>
         .spawn()
 }
 
-async fn run_wake_lock(lock: bool) -> Result<(), ServerError> {
+pub async fn run_wake_lock(lock: bool) -> Result<(), ServerError> {
     let command = if lock {
         "termux-wake-lock"
     } else {

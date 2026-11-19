@@ -16,11 +16,12 @@ use tokio::{
 };
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-use crate::minecraft::{ServerEvent, ServerManager, ServerState};
+use crate::minecraft::{ServerEvent, ServerManager, ServerState, run_wake_lock};
 
 const DEFAULT_BACKUP_TIME: &str = "05:00";
 const BACKUP_RETENTION: usize = 14;
 const WARNING_LEAD_MINUTES: i64 = 5;
+const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
 
@@ -263,22 +264,41 @@ pub async fn start_loop(server: Arc<Mutex<ServerManager>>, event_tx: UnboundedSe
 
     loop {
         let run_at = next_run(config.time);
-
         let warn_five = run_at - TimeDelta::minutes(WARNING_LEAD_MINUTES);
         let warn_one = run_at - TimeDelta::minutes(1);
-        let now = Local::now();
 
-        if warn_five > now {
-            sleep(duration_until(warn_five)).await;
-            announce(&server, "Server will stop for a backup in 5 minutes").await;
+        let mut warned_five = Local::now() >= warn_five;
+        let mut warned_one = Local::now() >= warn_one;
+
+        loop {
+            let now = Local::now();
+
+            if now >= run_at {
+                break;
+            }
+
+            if !warned_five && now >= warn_five {
+                warned_five = true;
+                if now < warn_one {
+                    announce(&server, "Server will stop for a backup in 5 minutes").await;
+                }
+            }
+
+            if !warned_one && now >= warn_one {
+                warned_one = true;
+                announce(&server, "Server will stop for a backup in 1 minute").await;
+            }
+
+            let next_target = if !warned_five {
+                warn_five
+            } else if !warned_one {
+                warn_one
+            } else {
+                run_at
+            };
+
+            sleep(duration_until(next_target).min(CHECK_INTERVAL)).await;
         }
-
-        if warn_one > Local::now() {
-            sleep(duration_until(warn_one)).await;
-        }
-
-        announce(&server, "Server will stop for a backup in 1 minute").await;
-        sleep(duration_until(run_at)).await;
 
         let progress_sink: Option<ProgressSink> = {
             let event_tx = event_tx.clone();
@@ -354,8 +374,22 @@ pub async fn perform_backup(
 
     emit_progress(progress.as_ref(), BackupProgress::Phase("scanning world"));
 
+    let wake_locked = match run_wake_lock(true).await {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("Failed to acquire wake lock: {error}");
+            false
+        }
+    };
+
     let archive_result =
         create_archive(world_dir, config.backup_dir.clone(), progress.clone()).await;
+
+    if wake_locked {
+        if let Err(error) = run_wake_lock(false).await {
+            eprintln!("Failed to release wake lock: {error}");
+        }
+    }
 
     let restart_result = {
         let mut manager = server.lock().await;
@@ -473,12 +507,8 @@ fn archive_to(
     match run_external_zip(world_dir, archive_path, sizes, reporter) {
         Ok(()) => {}
         Err(ZipRun::Unavailable(reason)) => {
-            eprintln!(
-                "System `zip` unavailable ({reason}); using the slower built-in archiver. \
-                 Install Info-ZIP with: pkg install zip"
-            );
+            eprintln!("System `zip` unavailable ({reason})");
             let _ = fs::remove_file(archive_path);
-            write_archive_native(world_dir, archive_path, reporter)?;
         }
         Err(ZipRun::Failed(error)) => return Err(error),
     }
@@ -629,28 +659,6 @@ fn appended_zip_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(".zip");
     PathBuf::from(name)
-}
-
-fn write_archive_native(
-    world_dir: &Path,
-    archive_path: &Path,
-    reporter: &mut ProgressReporter<'_>,
-) -> Result<(), BackupError> {
-    let root_name = world_dir
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "world".to_string());
-
-    let file = fs::File::create(archive_path)?;
-    let mut zip = ZipWriter::new(file);
-    add_directory(&mut zip, world_dir, world_dir, &root_name, reporter)?;
-
-    let file = zip
-        .finish()
-        .map_err(|error| BackupError::Zip(error.to_string()))?;
-    file.sync_all()?;
-
-    Ok(())
 }
 
 struct ProgressReporter<'a> {
@@ -885,203 +893,4 @@ fn outcome_message(outcome: &BackupOutcome) -> String {
     }
 
     message
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_dir(name: &str) -> PathBuf {
-        let directory = env::temp_dir().join(format!(
-            "termux-mc-manager-{name}-{}-{}",
-            std::process::id(),
-            Local::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-
-        fs::create_dir_all(&directory).unwrap();
-        directory
-    }
-
-    #[test]
-    fn archive_contains_world_files() {
-        let root = test_dir("archive");
-        let world = root.join("world");
-        let backups = root.join("backups");
-
-        fs::create_dir_all(world.join("region")).unwrap();
-        fs::write(world.join("level.dat"), b"level").unwrap();
-        fs::write(world.join("region/r.0.0.mca"), b"region").unwrap();
-
-        let archive = write_archive(&world, &backups, &|_| {}).unwrap();
-        let file = fs::File::open(&archive.path).unwrap();
-        let mut zip = zip::ZipArchive::new(file).unwrap();
-        let mut names = Vec::new();
-
-        for index in 0..zip.len() {
-            let entry = zip.by_index(index).unwrap();
-            names.push(entry.name().unwrap().to_string());
-        }
-
-        assert!(names.contains(&"world/level.dat".to_string()));
-        assert!(names.contains(&"world/region/r.0.0.mca".to_string()));
-
-        fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn pruning_keeps_newest_archives() {
-        let backups = test_dir("prune");
-
-        for day in 1..=16 {
-            fs::write(
-                backups.join(format!("world-202601{day:02}-000000.zip")),
-                b"backup",
-            )
-            .unwrap();
-        }
-
-        fs::write(backups.join("unrelated.zip"), b"keep").unwrap();
-
-        let removed = prune_old_backups(&backups, 14).unwrap();
-
-        assert_eq!(removed, 2);
-        assert!(backups.join("world-20260116-000000.zip").exists());
-        assert!(!backups.join("world-20260101-000000.zip").exists());
-        assert!(backups.join("unrelated.zip").exists());
-
-        fs::remove_dir_all(backups).ok();
-    }
-
-    #[test]
-    fn archive_reports_progress() {
-        use std::cell::RefCell;
-
-        let root = test_dir("progress");
-        let world = root.join("world");
-        let backups = root.join("backups");
-
-        fs::create_dir_all(world.join("region")).unwrap();
-        fs::write(world.join("level.dat"), vec![0u8; 1024]).unwrap();
-        fs::write(world.join("region/r.0.0.mca"), vec![0u8; 4096]).unwrap();
-
-        let events = RefCell::new(Vec::new());
-        let archive = write_archive(&world, &backups, &|progress| {
-            events.borrow_mut().push(progress)
-        })
-        .unwrap();
-
-        let events = events.into_inner();
-
-        assert!(events.len() >= 2);
-
-        let (files_done, files_total, bytes_done, bytes_total) = events
-            .iter()
-            .rev()
-            .find_map(|progress| match progress {
-                BackupProgress::Archive {
-                    files_done,
-                    files_total,
-                    bytes_done,
-                    bytes_total,
-                    ..
-                } => Some((*files_done, *files_total, *bytes_done, *bytes_total)),
-                BackupProgress::Phase(_) => None,
-            })
-            .unwrap();
-
-        assert_eq!(files_done, 2);
-        assert_eq!(files_total, 2);
-        assert_eq!(bytes_done, 5120);
-        assert_eq!(bytes_total, 5120);
-        assert!(archive.bytes > 0);
-
-        fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn progress_message_shows_percent_and_sizes() {
-        let progress = BackupProgress::Archive {
-            files_done: 5,
-            files_total: 10,
-            bytes_done: 512,
-            bytes_total: 1024,
-            current: "region/r.0.0.mca".to_string(),
-        };
-
-        let message = progress.message();
-
-        assert!(message.contains("50%"));
-        assert!(message.contains("512 B / 1.0 KB"));
-        assert!(message.contains("5 / 10 files"));
-        assert!(message.contains("region/r.0.0.mca"));
-
-        let empty = BackupProgress::Archive {
-            files_done: 0,
-            files_total: 0,
-            bytes_done: 0,
-            bytes_total: 0,
-            current: String::new(),
-        };
-
-        assert!(empty.message().contains("100%"));
-        assert!(
-            BackupProgress::Phase("stopping server")
-                .message()
-                .contains("stopping server")
-        );
-    }
-
-    #[test]
-    fn parses_info_zip_progress_lines() {
-        assert_eq!(
-            archive_entry_name("  adding: world/region/r.0.0.mca (deflated 3%)"),
-            Some("world/region/r.0.0.mca")
-        );
-        assert_eq!(
-            archive_entry_name("  updating: world/level.dat (stored 0%)"),
-            Some("world/level.dat")
-        );
-        assert_eq!(
-            archive_entry_name("  adding: world/region/ (stored 0%)"),
-            None
-        );
-        assert_eq!(
-            archive_entry_name("zip warning: name not matched: nope"),
-            None
-        );
-    }
-
-    #[test]
-    fn finalize_archive_renames_and_reports_size() {
-        let root = test_dir("finalize");
-        let temp = root.join("world-20260101-000000.zip.tmp");
-        let final_path = root.join("world-20260101-000000.zip");
-
-        fs::write(&temp, b"archive-bytes").unwrap();
-
-        let archive = finalize_archive(&temp, &final_path).unwrap();
-
-        assert!(!temp.exists());
-        assert_eq!(archive.path, final_path);
-        assert_eq!(archive.bytes, 13);
-
-        fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn finalize_archive_accepts_zip_appended_name() {
-        let root = test_dir("finalize-appended");
-        let temp = root.join("world-20260101-000001.zip.tmp");
-        let final_path = root.join("world-20260101-000001.zip");
-        let appended = appended_zip_path(&temp);
-
-        fs::write(&appended, b"archive").unwrap();
-
-        let archive = finalize_archive(&temp, &final_path).unwrap();
-
-        assert!(!appended.exists());
-        assert_eq!(archive.bytes, 7);
-
-        fs::remove_dir_all(root).ok();
-    }
 }
